@@ -157,6 +157,26 @@ Duas diferenças de comportamento, não só de desempenho, documentadas em `api/
 
 Se esses dois pontos incomodarem, a opção B não tem nenhum dos dois.
 
+#### A armadilha do `require(esm)` — não remova o `overrides` do package.json
+
+A Vercel não executa as funções com o carregador de módulos do Node: usa um próprio
+(`/opt/rust/nodejs.js`), que **não implementa `require()` de módulo ESM** — recurso que o Node
+tem desde a 22.12. Qualquer dependência CommonJS que faça `require()` de um pacote só-ESM
+derruba a função com `ERR_REQUIRE_ESM`, mesmo rodando perfeitamente na sua máquina.
+
+Foi o que aconteceu: `@fastify/static` é CommonJS e faz `require('content-disposition')`, que na
+versão 3 passou a ser só-ESM. Daí o `overrides` fixando a `^2.0.1`, última com a mesma API
+(`create`/`parse`) ainda empacotada como CommonJS.
+
+Para checar isto **antes** de um deploy, reproduza a restrição localmente:
+
+```bash
+node --no-experimental-require-module -e "import('./src/app.ts').then(() => console.log('ok'))"
+```
+
+Se imprimir `ok`, nenhuma dependência CommonJS está exigindo um pacote só-ESM. Vale rodar depois
+de qualquer `npm update` — o erro não aparece em `npm test`, só no deploy.
+
 ### Opção B — processo longo (Render, Railway, Fly, VPS)
 
 É o desenho original e o caminho que a suíte cobre inteiro.
