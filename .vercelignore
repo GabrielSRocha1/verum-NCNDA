@@ -1,0 +1,23 @@
+# A prévia estática precisa de UM arquivo: preview/index.html.
+# Tudo abaixo é código do servidor, fontes do bundle ou ferramenta de build —
+# nada disso é usado nem deve ficar público no deploy da Vercel.
+
+node_modules
+data
+
+src
+test
+scripts
+migrations
+docs
+
+# public/ é a raiz do PWA servida pelo servidor real. Fica de fora também para a
+# Vercel não confundir com diretório de saída (outputDirectory é "preview").
+public
+
+# Geradores da prévia: rodam no desenvolvimento, não no deploy.
+preview/build.mjs
+preview/build.py
+
+# Já está embutido dentro do index.html pelo build; servir à parte seria redundante.
+preview/mock-backend.js

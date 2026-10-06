@@ -92,13 +92,41 @@ o arquivo. **Não existe passo de build que gere JS**, e não é possível criar
 todos os imports — `allowImportingTsExtensions` exige `noEmit`, e tirar as extensões quebraria
 `npm start`.
 
-Configure a plataforma assim:
+### Onde este app roda — e onde não roda
+
+Ele precisa de **processo persistente e disco gravável**. Não roda em serverless
+(Vercel Functions, Lambda e afins) porque `src/server.ts` faz `app.listen()` e fica de pé,
+e `src/db.ts` cria `./data/pgdata` com o PGlite — filesystem só-leitura e processo efêmero
+quebram os dois.
+
+Use Render, Railway, Fly ou um VPS:
 
 | | |
 |---|---|
 | Build command | `npm ci` (ou `npm ci && npm run typecheck`) |
 | Start command | `npm start` |
 | Node | 22.18+ |
+
+Variáveis que você **precisa** definir:
+
+| Variável | Por quê |
+|---|---|
+| `HOST=0.0.0.0` | o padrão é `127.0.0.1`, que não aceita tráfego externo: o serviço sobe e fica inacessível |
+| `PUBLIC_ORIGIN=https://seu-dominio` | entra nos links de convite e no domínio que a carteira exibe ao assinar; sem isso os convites apontam para `localhost:8787` |
+| `SESSION_SECRET`, `INVITE_PEPPER` | 32+ caracteres. Em DEMO são sorteados a cada boot, então todo restart desloga todos e invalida convites |
+
+`PORT` costuma ser injetado pela plataforma — o código já o lê. Para o banco sobreviver aos
+deploys, monte um disco persistente em `./data`; sem disco, o DEMO re-semeia a cada boot.
+
+### Vercel: só a pré-visualização, como site estático
+
+O `vercel.json` e o `.vercelignore` do repositório publicam **apenas** `preview/index.html`,
+que é um arquivo único e autossuficiente (backend simulado rodando no navegador, estado em
+`localStorage`). Não há install, não há build e nada do servidor vai para o deploy — o que
+também evita a Vercel rodar `tsc` ao encontrar o `tsconfig.json`, origem do `TS2688`.
+
+Isso serve para **demonstrar a interface**. Não é o app real: sem Postgres, sem convites
+de verdade, sem assinaturas verificadas no servidor.
 
 Se a plataforma rodar `tsc` por conta própria, o `tsconfig.json` do repositório já está
 configurado para conferir tipos sem emitir. Rodar `tsc` **sem** esse tsconfig é o que produz
