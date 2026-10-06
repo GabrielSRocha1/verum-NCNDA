@@ -14,7 +14,7 @@ export interface Ctx {
   limiter: RateLimiter;
 }
 
-export type ChallengePurpose = 'INVITE' | 'LOGIN' | 'AGREEMENT' | 'DOCUMENT' | 'SETTLEMENT';
+export type ChallengePurpose = 'INVITE' | 'LOGIN' | 'AGREEMENT' | 'DOCUMENT' | 'SETTLEMENT' | 'VIEW_LINK';
 
 const PURPOSE_TEXT: Record<ChallengePurpose, string> = {
   INVITE: 'Prova de posse de carteira (convite)',
@@ -22,6 +22,7 @@ const PURPOSE_TEXT: Record<ChallengePurpose, string> = {
   AGREEMENT: 'SIGNATURE OF AGREEMENT — aceite da parceria',
   DOCUMENT: 'Aceite de documento',
   SETTLEMENT: 'AUTORIZAR LIQUIDAÇÃO',
+  VIEW_LINK: 'Prova de posse de carteira (link de visualização)',
 };
 
 /** Mensagem determinística assinada pela carteira. Reconstruída no servidor a partir do registro + nonce. */

@@ -102,6 +102,12 @@ export interface CreateOfferInput {
 }
 
 export async function createOffer(ctx: Ctx, userId: string, input: CreateOfferInput, opts: { isDemo?: boolean } = {}) {
+  // Quem entrou por link de visualização recebeu leitura de UMA operação, não um lugar na
+  // plataforma: não abre mesa própria. Concluir um convite promove a conta e libera isto.
+  const { rows: [autor] } = await ctx.db.query<any>(`SELECT origin FROM users WHERE id = $1`, [userId]);
+  if (autor?.origin === 'VIEW_LINK') {
+    throw new HttpError(403, 'VIEWER_ONLY', 'Sua conta foi criada por um link de visualização e só permite ler a operação compartilhada. Para abrir uma mesa, é preciso entrar por convite.');
+  }
   const grade = (() => { try { return parseGrade(input.grade); } catch (e) { throw badRequest('GRADE_INVALID', (e as Error).message); } })();
   const conditions = (input.conditions ?? []).map((c) => String(c).trim()).filter(Boolean);
   if (conditions.length > 5) throw badRequest('CONDITIONS_TOO_MANY', 'Máximo de 5 linhas de condições.');

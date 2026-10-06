@@ -178,6 +178,134 @@ test('6. o admin vê quem se identificou, com o que a pessoa declarou e a cartei
   assert.equal(ruim.statusCode, 400);
 });
 
+/** Prova a carteira pelo link e devolve os cookies (sessão ou prova da carteira). */
+async function provarCarteira(token: string, kp: nacl.SignKeyPair) {
+  const address = base58Encode(kp.publicKey);
+  const ch = await app.app.inject({ method: 'POST', url: `/api/shared/${token}/wallet-challenge`, payload: { address }, remoteAddress: freshIp() });
+  assert.equal(ch.statusCode, 200, ch.body);
+  const c = ch.json();
+  const v = await app.app.inject({
+    method: 'POST', url: `/api/shared/${token}/wallet-verify`, remoteAddress: freshIp(),
+    payload: { challengeId: c.challengeId, nonce: c.nonce, signature: base58Encode(nacl.sign.detached(new TextEncoder().encode(c.message), kp.secretKey)) },
+  });
+  assert.equal(v.statusCode, 200, v.body);
+  return { address, step: v.json().step as string, prova: cookieOf(v, 'votc_view'), sessao: cookieOf(v, 'votc_session') };
+}
+
+test('8. carteira SEM cadastro entra pelo link: prova a carteira, se identifica e lê a operação', async () => {
+  const { token } = await linkDe('OTC-0002');
+  const kp = nacl.sign.keyPair();
+  const { address, step, prova, sessao } = await provarCarteira(token, kp);
+  assert.equal(step, 'SIGNUP');
+  assert.equal(sessao, undefined);                                            // ainda não há sessão
+  assert.ok(prova, 'a carteira provada precisa ficar guardada até o cadastro terminar');
+
+  // Com a carteira provada, o portão abre — mas sem nada da operação e sem prefill.
+  const gate = await app.app.inject({ method: 'GET', url: `/api/shared/${token}/gate`, headers: { cookie: prova! } });
+  assert.equal(gate.statusCode, 200, gate.body);
+  assert.equal(gate.json().registered, false);
+  assert.equal(gate.json().prefill, null);
+  assert.equal(gate.json().deal.code, 'OTC-0002');
+
+  const reg = await app.app.inject({ method: 'POST', url: `/api/shared/${token}/register`, headers: { cookie: prova! },
+    payload: { fullName: 'Tereza Vilanova', email: 'tereza.nova@ex.test', phone: '+55 11 93333-0001', country: 'BR' } });
+  assert.equal(reg.statusCode, 200, reg.body);
+  const sessaoNova = cookieOf(reg, 'votc_session');
+  assert.ok(sessaoNova, 'concluir a identificação entra na sessão');
+
+  const d = await app.app.inject({ method: 'GET', url: `/api/shared/${token}`, headers: { cookie: sessaoNova! } });
+  assert.equal(d.statusCode, 200, d.body);
+  assert.equal(d.json().readOnly, true);
+  assert.equal(d.json().participants.length, 7);
+  // A conta existe e é dela, com a carteira que assinou.
+  const me = await app.app.inject({ method: 'GET', url: '/api/me', headers: { cookie: sessaoNova! } });
+  assert.equal(me.json().fullName, 'Tereza Vilanova');
+  assert.equal(me.json().wallet, address);
+  // E agora entra por login normal, como qualquer cadastro.
+  const ch2 = await app.app.inject({ method: 'POST', url: '/auth/wallet-challenge', payload: { address }, remoteAddress: freshIp() });
+  const c2 = ch2.json();
+  const login = await app.app.inject({ method: 'POST', url: '/auth/wallet-verify', remoteAddress: freshIp(), payload: { challengeId: c2.challengeId, nonce: c2.nonce, signature: base58Encode(nacl.sign.detached(new TextEncoder().encode(c2.message), kp.secretKey)) } });
+  assert.equal(login.statusCode, 200);
+});
+
+test('9. o cadastro por link é SÓ de visualizador: não pertence a mesa, não abre mesa própria', async () => {
+  const { token } = await linkDe('OTC-0003');
+  const kp = nacl.sign.keyPair();
+  const { prova } = await provarCarteira(token, kp);
+  const reg = await app.app.inject({ method: 'POST', url: `/api/shared/${token}/register`, headers: { cookie: prova! },
+    payload: { fullName: 'Otavio Brandao', email: 'otavio.visual@ex.test', phone: '+55 11 93333-0002', country: 'BR' } });
+  const sessao = cookieOf(reg, 'votc_session')!;
+  // Não é membro de nada: a lista de mesas vem vazia e o dashboard não mostra operação alheia.
+  assert.deepEqual((await get('/api/deals', sessao)).json().deals, []);
+  assert.equal((await get(`/api/deals/${await dealId('OTC-0003')}`, sessao)).statusCode, 404);
+  // E não cria mesa própria: leitura compartilhada não é lugar na plataforma.
+  const tentativa = await app.app.inject({ method: 'POST', url: '/api/deals', headers: { cookie: sessao },
+    payload: { kind: 'UNICA', title: 'Mesa do visualizador', deliverAssetId: 'USDT:solana-demo', receiveAssetId: 'USD:cash', volumeText: '1', grade: '5/3' } });
+  assert.equal(tentativa.statusCode, 403);
+  assert.equal(tentativa.json().error, 'VIEWER_ONLY');
+});
+
+test('10. sem link válido não há cadastro: o token é a autorização', async () => {
+  const kp = nacl.sign.keyPair();
+  const address = base58Encode(kp.publicKey);
+  for (const t of ['A'.repeat(43), 'curto']) {
+    const r = await app.app.inject({ method: 'POST', url: `/api/shared/${t}/wallet-challenge`, payload: { address }, remoteAddress: freshIp() });
+    assert.ok([400, 404].includes(r.statusCode), `${t} → ${r.statusCode}`);
+  }
+  // Identificar-se sem sessão e sem carteira provada é recusado.
+  const { token } = await linkDe('OTC-0002');
+  const semProva = await app.app.inject({ method: 'POST', url: `/api/shared/${token}/register`, payload: { fullName: 'Ninguem Sem Prova', email: 'sem.prova@ex.test', phone: '+55 11 93333-0003', country: 'BR' } });
+  assert.equal(semProva.statusCode, 401);
+  // A prova vale só para o link em que foi feita.
+  const outro = await linkDe('OTC-0001');
+  const { prova } = await provarCarteira(outro.token, kp);
+  const trocado = await app.app.inject({ method: 'POST', url: `/api/shared/${token}/register`, headers: { cookie: prova! },
+    payload: { fullName: 'Carteira Trocada', email: 'trocada@ex.test', phone: '+55 11 93333-0004', country: 'BR' } });
+  assert.equal(trocado.statusCode, 401);
+  // E-mail já usado por outra carteira não vira segundo cadastro.
+  const kp2 = nacl.sign.keyPair();
+  const p2 = await provarCarteira(outro.token, kp2);
+  const dup = await app.app.inject({ method: 'POST', url: `/api/shared/${outro.token}/register`, headers: { cookie: p2.prova! },
+    payload: { fullName: 'Email Repetido', email: 'rafael.monteiro@demo.verum', phone: '+55 11 93333-0005', country: 'BR' } });
+  assert.equal(dup.statusCode, 409);
+  assert.equal(dup.json().error, 'EMAIL_IN_USE');
+});
+
+test('11. concluir um convite promove a conta de visualizador para parceiro', async () => {
+  const { token } = await linkDe('OTC-0002');
+  const kp = nacl.sign.keyPair();
+  const { address, prova } = await provarCarteira(token, kp);
+  await app.app.inject({ method: 'POST', url: `/api/shared/${token}/register`, headers: { cookie: prova! },
+    payload: { fullName: 'Renata Colosso', email: 'renata.promo@ex.test', phone: '+55 11 93333-0006', country: 'BR' } });
+  const { rows: [antes] } = await app.db.query<any>(`SELECT origin FROM users WHERE lower(email) = 'renata.promo@ex.test'`);
+  assert.equal(antes.origin, 'VIEW_LINK');
+
+  // Admin convida essa carteira para a cadeira vazia da OTC-0001 e ela conclui o convite.
+  const admin = await loginAs('pm01');
+  const id1 = await dealId('OTC-0001');
+  const inv = await app.app.inject({ method: 'POST', url: '/invitations', headers: { cookie: admin }, payload: { dealId: id1, roleKey: 'INTERMEDIACAO_COMPRA', roleSeq: 1 } });
+  assert.equal(inv.statusCode, 200, inv.body);
+  const t = (inv.json().link as string).split('/i/')[1];
+  const o = await app.app.inject({ method: 'POST', url: '/invite/open', payload: { token: t }, remoteAddress: freshIp() });
+  const ck = cookieOf(o, 'votc_inv')!;
+  await app.app.inject({ method: 'POST', url: '/invite/verify-code', payload: { token: t, code: inv.json().code }, headers: { cookie: ck }, remoteAddress: freshIp() });
+  const wch = await app.app.inject({ method: 'POST', url: '/invite/wallet-challenge', payload: { token: t, address }, headers: { cookie: ck }, remoteAddress: freshIp() });
+  const w = wch.json();
+  const wv = await app.app.inject({ method: 'POST', url: '/invite/wallet-verify', headers: { cookie: ck }, remoteAddress: freshIp(),
+    payload: { token: t, challengeId: w.challengeId, nonce: w.nonce, signature: base58Encode(nacl.sign.detached(new TextEncoder().encode(w.message), kp.secretKey)) } });
+  assert.equal(wv.json().step, 'TERMS');                                       // já tem cadastro
+  const fim = await app.app.inject({ method: 'POST', url: '/invite/complete', payload: { token: t, acceptTerms: true }, headers: { cookie: ck }, remoteAddress: freshIp() });
+  assert.equal(fim.statusCode, 200, fim.body);
+
+  const { rows: [depois] } = await app.db.query<any>(`SELECT origin FROM users WHERE lower(email) = 'renata.promo@ex.test'`);
+  assert.equal(depois.origin, 'INVITE');
+  // E agora pode abrir mesa própria.
+  const sessao = cookieOf(fim, 'votc_session')!;
+  const criar = await app.app.inject({ method: 'POST', url: '/api/deals', headers: { cookie: sessao },
+    payload: { kind: 'UNICA', title: 'Mesa de quem virou parceiro', deliverAssetId: 'USDT:solana-demo', receiveAssetId: 'USD:cash', volumeText: '1', grade: '5/3' } });
+  assert.equal(criar.statusCode, 200, criar.body);
+});
+
 test('7. a auditoria registra geração, troca e acesso — sem token em claro', async () => {
   const { id } = await linkDe('OTC-0001');
   const { rows } = await app.db.query<any>(

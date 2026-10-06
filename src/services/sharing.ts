@@ -11,7 +11,10 @@ import { HttpError, audit, notFound } from '../lib/common.ts';
 import { abbreviateAddress, newToken } from '../lib/crypto.ts';
 import { assertDealAdmin } from './deals.ts';
 import { validateSignup, type SignupInput } from './invitations.ts';
-import type { Ctx } from './auth.ts';
+import { issueChallenge, consumeChallenge, type Ctx } from './auth.ts';
+
+/** Cookie que guarda a carteira já provada pelo link, até a identificação ser concluída. */
+export const VIEW_COOKIE = 'votc_view';
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 
@@ -106,8 +109,11 @@ export async function assertViewer(q: Queryable, dealId: string, userId: string)
   throw new HttpError(403, 'VIEWER_REGISTRATION_REQUIRED', 'Identifique-se para abrir esta operação.');
 }
 
-/** Portão: só o cabeçalho da mesa, para a pessoa saber o que está abrindo antes de se identificar. */
-export async function viewerGate(ctx: Ctx, userId: string, address: string, token: string) {
+/**
+ * Portão: só o cabeçalho da mesa, para a pessoa saber o que está abrindo antes de se identificar.
+ * userId null = carteira provada pelo link mas ainda sem cadastro — nada a pré-preencher.
+ */
+export async function viewerGate(ctx: Ctx, userId: string | null, address: string, token: string) {
   return ctx.db.tx(async (q) => {
     const { id: dealId } = await dealByToken(q, token);
     const { rows: [d] } = await q.query<any>(
@@ -122,7 +128,7 @@ export async function viewerGate(ctx: Ctx, userId: string, address: string, toke
     const { rows: [u] } = await q.query<any>(`SELECT full_name, email, phone, country FROM users WHERE id = $1`, [userId]);
     const sym = (id: string | null) => (id ? ctx.assets.byId(id)?.symbol ?? id : '?');
     return {
-      registered: d.is_admin || d.member || d.viewer,
+      registered: Boolean(d.is_admin || d.member || d.viewer),
       wallet: address, walletShort: abbreviateAddress(address),
       prefill: u ? { fullName: u.full_name, email: u.email, phone: u.phone, country: u.country } : null,
       deal: {
@@ -134,20 +140,72 @@ export async function viewerGate(ctx: Ctx, userId: string, address: string, toke
   });
 }
 
-/** Identificação de quem abriu o link. Os dados são declarados; só a carteira é verificada. */
-export async function registerViewer(ctx: Ctx, userId: string, address: string, token: string, input: SignupInput) {
+/**
+ * Identificação de quem abriu o link. Os dados são declarados; só a carteira é verificada.
+ *
+ * userId null = carteira provada pelo link mas ainda sem cadastro: cria o usuário aqui. Isso NÃO
+ * é cadastro público — exige um link secreto emitido pelo admin da mesa — e não dá pertencimento
+ * a mesa nenhuma: o cadastro só serve para ler a operação onde a pessoa se identificou.
+ */
+export async function registerViewer(ctx: Ctx, userId: string | null, address: string, token: string, input: SignupInput) {
   const errs = validateSignup(input);
   if (errs.length) throw new HttpError(400, 'VALIDATION', errs.join(' '));
   return ctx.db.tx(async (q) => {
     const { id: dealId } = await dealByToken(q, token);
-    const { rows: dup } = await q.query(`SELECT 1 FROM deal_viewers WHERE deal_id = $1 AND user_id = $2`, [dealId, userId]);
+    const nome = String(input.fullName).trim().replace(/\s+/g, ' ');
+    const email = String(input.email).trim().toLowerCase();
+    const telefone = String(input.phone).trim();
+    let uid = userId;
+    if (uid === null) {
+      const { rows: emailDup } = await q.query(`SELECT 1 FROM users WHERE lower(email) = $1`, [email]);
+      if (emailDup.length) throw new HttpError(409, 'EMAIL_IN_USE', 'Este e-mail já está vinculado a outra carteira.');
+      // Corrida: duas abas provando a mesma carteira. A segunda encontra o cadastro e segue com ele.
+      const { rows: wDup } = await q.query<any>(`SELECT user_id FROM wallets WHERE network = $1 AND address = $2`, [ctx.sig.network, address]);
+      if (wDup[0]) uid = wDup[0].user_id;
+      else {
+        const { rows: [u] } = await q.query<any>(
+          `INSERT INTO users (full_name, email, phone, country, is_demo, origin, terms_accepted_at, created_at)
+           VALUES ($1,$2,$3,$4,$5,'VIEW_LINK',$6,$6) RETURNING id`,
+          [nome, email, telefone, input.country, ctx.cfg.demoMode, ctx.cfg.now().toISOString()]);
+        uid = u.id as string;
+        await q.query(`INSERT INTO wallets (user_id, network, address, created_at) VALUES ($1,$2,$3,$4)`,
+          [uid, ctx.sig.network, address, ctx.cfg.now().toISOString()]);
+        await audit(q, { at: ctx.cfg.now(), userId: uid, action: 'SIGNUP_COMPLETED', entity: 'user', entityId: uid, dealId, wallet: address });
+      }
+    }
+    const { rows: dup } = await q.query(`SELECT 1 FROM deal_viewers WHERE deal_id = $1 AND user_id = $2`, [dealId, uid]);
     if (dup.length) throw new HttpError(409, 'ALREADY_REGISTERED', 'Você já se identificou para esta operação.');
     await q.query(
       `INSERT INTO deal_viewers (deal_id, user_id, full_name, email, phone, country, wallet, at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [dealId, userId, String(input.fullName).trim().replace(/\s+/g, ' '), String(input.email).trim().toLowerCase(),
-        String(input.phone).trim(), input.country, address, ctx.cfg.now().toISOString()]);
-    await audit(q, { at: ctx.cfg.now(), userId, action: 'VIEW_LINK_ACCESSED', entity: 'deal', entityId: dealId, dealId, wallet: address });
-    return { ok: true };
+      [dealId, uid, nome, email, telefone, input.country, address, ctx.cfg.now().toISOString()]);
+    await audit(q, { at: ctx.cfg.now(), userId: uid, action: 'VIEW_LINK_ACCESSED', entity: 'deal', entityId: dealId, dealId, wallet: address });
+    return { ok: true, userId: uid as string };
+  });
+}
+
+// ---------------------------------------------------------------- entrar pelo link, sem convite
+/** Desafio para provar a carteira. Só existe para quem tem um link válido na mão. */
+export async function viewerChallenge(ctx: Ctx, token: string, address: string) {
+  return ctx.db.tx(async (q) => {
+    const { id: dealId } = await dealByToken(q, token);
+    const { rows: [d] } = await q.query<any>(`SELECT code FROM deals WHERE id = $1`, [dealId]);
+    return issueChallenge(q, ctx, {
+      purpose: 'VIEW_LINK', address,
+      context: { 'Operação': d.code, Finalidade: 'Abrir link de visualização (só leitura)' },
+    });
+  });
+}
+
+/**
+ * Consome o desafio e diz quem é. Carteira com cadastro entra direto; carteira nova segue para a
+ * identificação, e é lá que o cadastro nasce — aqui nada é criado.
+ */
+export async function viewerVerify(ctx: Ctx, token: string, input: { challengeId: string; nonce: string; signature: string }) {
+  return ctx.db.tx(async (q) => {
+    await dealByToken(q, token);
+    const ch = await consumeChallenge(q, ctx, { ...input, purpose: 'VIEW_LINK' });
+    const { rows } = await q.query<any>(`SELECT user_id FROM wallets WHERE network = $1 AND address = $2`, [ctx.sig.network, ch.wallet_address]);
+    return { address: ch.wallet_address as string, userId: (rows[0]?.user_id as string) ?? null };
   });
 }

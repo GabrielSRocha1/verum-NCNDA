@@ -386,6 +386,9 @@ export async function inviteComplete(ctx: Ctx, token: string, cookie: string | u
     await q.query(`INSERT INTO deal_participants (deal_id, user_id, via_invitation, joined_at) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
       [inv.deal_id, inv.user_id, inv.id, now.toISOString()]);
     await q.query(`UPDATE users SET terms_accepted_at = COALESCE(terms_accepted_at, $2) WHERE id = $1`, [inv.user_id, now.toISOString()]);
+    // Conta que tinha entrado só por link de visualização passa a ser parceiro de verdade: concluiu
+    // um convite, ocupa uma cadeira, e deixa de ser leitura apenas.
+    await q.query(`UPDATE users SET origin = 'INVITE' WHERE id = $1 AND origin = 'VIEW_LINK'`, [inv.user_id]);
     await q.query(`UPDATE invitations SET status = 'CONCLUIDO', completed_at = $2 WHERE id = $1`, [inv.id, now.toISOString()]);
     await audit(q, { at: now, userId: inv.user_id, action: 'INVITE_COMPLETED', entity: 'invitation', entityId: inv.id, dealId: inv.deal_id, oldValue: { status: 'ABERTO' }, newValue: { status: 'CONCLUIDO' }, wallet: inv.pending_wallet_address });
     return { dealId: inv.deal_id as string, userId: inv.user_id as string, address: inv.pending_wallet_address as string };

@@ -211,6 +211,19 @@ export async function walletLogin(accountKey = null) {
   return state.me;
 }
 
+/**
+ * Entrar por um link de visualização. Aqui o LINK é a autorização, não o convite: carteira sem
+ * cadastro é aceita e o cadastro nasce na identificação seguinte (passo SIGNUP).
+ */
+export async function walletViewLink(token) {
+  const ad = getAdapter();
+  const acc = await walletPick({ title: 'Abrir link de visualização' });
+  ad.provider.connect(acc.key);
+  const ch = await api('POST', `/api/shared/${token}/wallet-challenge`, { address: acc.address });
+  const signature = await walletSign(ch.message, { title: 'Prova de posse da carteira', action: 'ASSINAR E ABRIR' });
+  return api('POST', `/api/shared/${token}/wallet-verify`, { challengeId: ch.challengeId, nonce: ch.nonce, signature });
+}
+
 /** Garante que a carteira simulada está conectada na conta da sessão (para assinar aceites). */
 export function ensureWalletForMe() {
   const ad = getAdapter();

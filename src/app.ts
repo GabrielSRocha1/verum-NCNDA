@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { projectDir } from './lib/paths.ts';
 import { loadConfig, type AppConfig } from './config.ts';
 import { openDb, dbErrorCode, type Db } from './db.ts';
-import { sha256Hex } from './lib/crypto.ts';
+import { sha256Hex, signValue, unsignValue, abbreviateAddress } from './lib/crypto.ts';
 import { HttpError, RateLimiter, audit, notFound } from './lib/common.ts';
 import { distribute, formatUnits } from './lib/bps.ts';
 import {
@@ -257,14 +257,53 @@ export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS
   // Leitura por link. SOMENTE GET: nenhuma rota de escrita aceita token, então quem abre o link
   // não tem caminho para assinar, convidar ou alterar. O portão e o cadastro ficam antes de tudo.
   const sharedSchema = { params: obj({ token: S.token }) };
+
+  // Entrar pelo link sem convite: o link É a autorização. Quem o tem prova a carteira e, se não
+  // tiver cadastro, cria um de VISUALIZADOR na identificação — sem pertencer a mesa nenhuma.
+  // Continua não havendo cadastro público: sem um link válido, nenhuma destas rotas existe.
+  /** Carteira já provada para ESTE link, guardada até a identificação terminar. */
+  const viewProof = (req: FastifyRequest, token: string): string | null => {
+    const payload = unsignValue(cfg.sessionSecret, req.cookies[share.VIEW_COOKIE]);
+    if (!payload) return null;
+    const sep = payload.indexOf(':');
+    const [t, addr] = [payload.slice(0, sep), payload.slice(sep + 1)];
+    return t === token && addr ? addr : null;
+  };
+  app.post('/api/shared/:token/wallet-challenge', { schema: { ...sharedSchema, body: obj({ address: S.address }) } }, async (req: any) => {
+    limit('authChallenge', req.ip, tokenKey(req.params.token));
+    return share.viewerChallenge(ctx, req.params.token, req.body.address);
+  });
+  app.post('/api/shared/:token/wallet-verify', { schema: { ...sharedSchema, body: signed } }, async (req: any, reply) => {
+    limit('authVerify', req.ip, tokenKey(req.params.token));
+    const r = await share.viewerVerify(ctx, req.params.token, req.body);
+    if (r.userId) {
+      setSession(reply, r.userId, r.address);
+      return { step: 'GATE', existingUser: true, walletShort: abbreviateAddress(r.address) };
+    }
+    // Sem cadastro: guarda a prova da carteira pelo tempo do onboarding e segue para identificação.
+    reply.setCookie(share.VIEW_COOKIE, signValue(cfg.sessionSecret, `${req.params.token}:${r.address}`),
+      { ...cookieBase, path: '/api/shared', maxAge: cfg.onboardingTtlMinutes * 60 });
+    return { step: 'SIGNUP', existingUser: false, walletShort: abbreviateAddress(r.address) };
+  });
+
+  /** Sessão quando existe; senão, a carteira provada pelo link. Sem nenhuma das duas, 401. */
+  const viewerIdentity = async (req: any, reply: FastifyReply): Promise<{ uid: string | null; addr: string }> => {
+    const s = readSessionCookie(ctx, req.cookies[SESSION_COOKIE]);
+    if (s) { setSession(reply, s.uid, s.addr, s.iat); return { uid: s.uid, addr: s.addr }; }
+    const addr = viewProof(req, req.params.token);
+    if (!addr) throw new HttpError(401, 'UNAUTHENTICATED', 'Conecte a Verum Wallet para abrir este link.');
+    return { uid: null, addr };
+  };
   app.get('/api/shared/:token/gate', { schema: sharedSchema }, async (req: any, reply) => {
-    const s = await auth(req, reply);
-    return share.viewerGate(ctx, s.uid, s.addr, req.params.token);
+    const { uid, addr } = await viewerIdentity(req, reply);
+    return share.viewerGate(ctx, uid, addr, req.params.token);
   });
   app.post('/api/shared/:token/register', { schema: { ...sharedSchema, body: obj({ fullName: { type: 'string', maxLength: 120 }, email: { type: 'string', maxLength: 254 }, phone: { type: 'string', maxLength: 24 }, country: { type: 'string', pattern: '^[A-Z]{2}$' } }) } },
     async (req: any, reply) => {
-      const s = await auth(req, reply);
-      return share.registerViewer(ctx, s.uid, s.addr, req.params.token, req.body);
+      const { uid, addr } = await viewerIdentity(req, reply);
+      const r = await share.registerViewer(ctx, uid, addr, req.params.token, req.body);
+      if (!uid) { setSession(reply, r.userId, addr); reply.clearCookie(share.VIEW_COOKIE, { path: '/api/shared' }); }
+      return { ok: true };
     });
   /** Resolve token + identificação e devolve o olhar certo: membro vê como membro, visitante vê só leitura. */
   const sharedAccess = async (req: any, reply: FastifyReply) => {

@@ -3462,6 +3462,19 @@ async function walletLogin(accountKey = null) {
   return state.me;
 }
 
+/**
+ * Entrar por um link de visualização. Aqui o LINK é a autorização, não o convite: carteira sem
+ * cadastro é aceita e o cadastro nasce na identificação seguinte (passo SIGNUP).
+ */
+async function walletViewLink(token) {
+  const ad = getAdapter();
+  const acc = await walletPick({ title: 'Abrir link de visualização' });
+  ad.provider.connect(acc.key);
+  const ch = await api('POST', `/api/shared/${token}/wallet-challenge`, { address: acc.address });
+  const signature = await walletSign(ch.message, { title: 'Prova de posse da carteira', action: 'ASSINAR E ABRIR' });
+  return api('POST', `/api/shared/${token}/wallet-verify`, { challengeId: ch.challengeId, nonce: ch.nonce, signature });
+}
+
 /** Garante que a carteira simulada está conectada na conta da sessão (para assinar aceites). */
 function ensureWalletForMe() {
   const ad = getAdapter();
@@ -3871,6 +3884,9 @@ async function render() {
   currentRoute = key;
   clear(root);
   add(root, ribbon());
+  // Link de visualização: a entrada é pelo próprio link, não pelo login da mesa — quem recebeu o
+  // link pode nem ter cadastro ainda. Sem este desvio, cairia no login e seria recusado.
+  if (!state.me && route.name === 'm' && route.id) { root.append(await viewerLinkPage(route.id)); return; }
   if (!state.me) { root.append(loginPage()); return; }
   const main = h('main', { class: 'main', id: 'main' });
   root.append(h('div', { class: 'shell' }, sidebar(route), main), bottomNav(route));
@@ -4058,12 +4074,63 @@ async function dealRoomPage(id, tab) {
 
 /** Mesa aberta por link de visualização: mesmas abas, nenhuma ação. */
 async function sharedRoomPage(token, tab) {
-  const gate = await api('GET', `/api/shared/${token}/gate`);
+  let gate;
+  // 401 aqui = sessão expirou no meio do caminho: volta para a entrada do link, não para o login
+  // da mesa (quem abriu o link pode nem ter cadastro).
+  try { gate = await api('GET', `/api/shared/${token}/gate`); }
+  catch (e) { if (e.status === 401) return viewerConnectPage(token); throw e; }
   if (!gate.registered) return viewerSignupPage(token, gate);
   const d = await api('GET', `/api/shared/${token}`);
   return roomPage(d, tab, (k) => `#/m/${token}/${k}`,
     h('div', { class: 'notice notice-info', style: 'margin-bottom:14px' },
       'Visualização compartilhada — só leitura. Você vê a operação inteira, mas não pode assinar, convidar nem alterar nada.'));
+}
+
+/**
+ * Link de visualização aberto por quem ainda não tem sessão — caso normal de carteira sem
+ * cadastro. Decide entre conectar a carteira e se identificar olhando o portão: ele responde 401
+ * enquanto não houver carteira provada, e passa a responder quando houver.
+ *
+ * Isto vive FORA do shell do app de propósito: o shell só desenha páginas quando há perfil
+ * carregado, e aqui ainda não há — a conta só nasce no fim da identificação.
+ */
+async function viewerLinkPage(token) {
+  let gate = null;
+  try { gate = await api('GET', `/api/shared/${token}/gate`); }
+  catch (e) {
+    if (e.status === 401) return viewerConnectPage(token);                     // falta provar a carteira
+    return h('main', { class: 'gate' }, brand('Link de visualização'),
+      h('h1', {}, 'Link indisponível'), h('p', { class: 'lead' }, e.message || 'Este link de visualização não é mais válido.'));
+  }
+  return gate.registered ? viewerConnectPage(token) : viewerSignupPage(token, gate);
+}
+
+/**
+ * Primeira tela do link: não mostra nada da operação. O cabeçalho da mesa só aparece depois da
+ * carteira provada, e a operação só depois da identificação.
+ */
+function viewerConnectPage(token) {
+  const err = h('p', { class: 'form-error', role: 'alert' });
+  const btn = h('button', { class: 'btn btn-primary btn-block' }, 'CONECTAR VERUM WALLET');
+  btn.onclick = async () => {
+    err.textContent = ''; btn.disabled = true;
+    try {
+      const r = await walletViewLink(token);
+      // Carteira com cadastro já entra na sessão; carteira nova segue sem sessão para a
+      // identificação, e quem decide isso é o portão no próximo render.
+      if (r.step === 'GATE') { try { state.me = await api('GET', '/api/me'); } catch { /* segue sem perfil */ } }
+      render();
+    } catch (e) {
+      if (e.code !== 'CANCELLED') err.textContent = e.message;
+      btn.disabled = false;
+    }
+  };
+  return h('main', { class: 'gate' }, brand('Link de visualização'),
+    h('h1', {}, 'Visualização de operação'),
+    h('p', { class: 'lead' }, 'Você recebeu um link para ver uma operação em modo leitura. Conecte a Verum Wallet para continuar: você assina uma mensagem que prova que a carteira é sua. Não é transação e não movimenta fundos.'),
+    btn, err,
+    h('p', { class: 'small muted', style: 'margin-top:18px' }, 'Depois da carteira você se identifica, e só então a operação aparece. Visualizar não permite assinar, convidar nem alterar nada.'),
+    state.config?.demoMode ? h('p', { class: 'small muted', style: 'margin-top:26px;text-align:center' }, 'DEMO / TESTNET — NO REAL FUNDS') : null);
 }
 
 /** Primeiro acesso ao link: a pessoa se identifica antes de ver a operação. */
