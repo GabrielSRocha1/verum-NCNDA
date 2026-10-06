@@ -1,0 +1,7 @@
+# LF em todo o repositório, inclusive no checkout.
+# preview/index.html é um arquivo GERADO e comparado byte a byte por "npm run preview:check";
+# se o checkout convertesse para CRLF, a checagem falharia em clones Windows.
+* text=auto eol=lf
+
+# Binários: nunca normalizar.
+*.png -text

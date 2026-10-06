@@ -1,0 +1,28 @@
+{
+  "name": "verum-ncnda-private-dapp",
+  "version": "0.1.0",
+  "description": "VERUM NCNDA PRIVATE DAPP — Deal Room privada OTC (DEMO / TESTNET — NO REAL FUNDS)",
+  "scripts": {
+    "start": "node src/server.ts",
+    "dev": "node --watch src/server.ts",
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "db:reset": "node scripts/reset-db.ts",
+    "vendor": "node scripts/vendor.ts",
+    "preview": "node preview/build.mjs",
+    "preview:check": "node preview/build.mjs --check"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/static": "^10.1.5",
+    "fastify": "^5.12.5",
+    "qrcode-generator": "^2.0.4",
+    "tweetnacl": "^1.0.3"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  }
+}
