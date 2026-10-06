@@ -99,7 +99,7 @@ test('11 QrPayloadAdapter: Solana Pay com amount em uiAmountString e spl-token; 
   const addr = base58Encode(nacl.sign.keyPair().publicKey);
   const usdc = defaultAssetRegistry().find((x) => x.id === 'USDC:solana-devnet')!;
   const uri = new SolanaPayQrAdapter().build({ recipient: addr, asset: usdc, amount: 12500000n, label: 'VERUM NCNDA', message: 'OTC-0001 Vendedor' }).uri;
-  assert.equal(uri, `solana:${addr}?amount=12.5&spl-token=${usdc.mint}&label=VERUM%20OTC&message=OTC-0001%20Vendedor`);
+  assert.equal(uri, `solana:${addr}?amount=12.5&spl-token=${usdc.mint}&label=VERUM%20NCNDA&message=OTC-0001%20Vendedor`);
   const demo = new DemoQrAdapter().build({ recipient: addr, asset: defaultAssetRegistry()[0], amount: 1n });
   assert.ok(demo.demo); assert.ok(!demo.uri.includes('spl-token')); assert.ok(demo.uri.startsWith(`solana:${addr}?label=DEMO`));
   assert.equal(qrAdapterFor('bitcoin-demo').build({ recipient: addr, asset: null }).format, 'ADDRESS');
@@ -114,7 +114,8 @@ test('12 WalletAdapter (cliente): recusa providers que não sejam a Verum Wallet
   assert.equal(createWalletAdapter({ demoMode: false }).isAvailable(), false);
   assert.equal(createWalletAdapter({ demoMode: true, simulateMissing: true }).isAvailable(), false);
   const miss = choiceState({ walletAvailable: false, downloadUrl: '' });
-  assert.equal(miss.primary, 'download'); assert.equal(miss.signupDisabled, true); assert.equal(miss.showDownload, false); assert.match(miss.downloadFallback, /Peça o link/);
+  assert.equal(miss.primary, 'download'); assert.equal(miss.signupDisabled, true); assert.equal(miss.showDownload, false);
+  assert.ok(miss.downloadFallback, 'sem downloadUrl, o fallback tem de existir'); assert.match(miss.downloadFallback, /Peça o link/);
   const ok = choiceState({ walletAvailable: true, downloadUrl: 'https://x' });
   assert.equal(ok.primary, 'signup'); assert.equal(ok.signupDisabled, false); assert.equal(ok.showDownload, true);
   assert.equal(pctToBps('3,33'), 333); assert.equal(pctToBps('abc'), null);

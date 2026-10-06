@@ -1,0 +1,40 @@
+{
+  // Este projeto NÃO é compilado: o Node executa os .ts direto (type-stripping nativo,
+  // por isso "engines.node": ">=22.18" e os imports com extensão .ts explícita).
+  // O TypeScript aqui serve só para CONFERIR tipos — daí "noEmit".
+  //
+  //   npm run typecheck   -> tsc --noEmit
+  //   npm start           -> node src/server.ts
+  //
+  // No deploy, o passo de build deve ser "npm run typecheck" (ou nenhum). Não tente
+  // gerar JS: "allowImportingTsExtensions" exige "noEmit", e remover as extensões .ts
+  // dos imports para poder emitir quebraria a execução direta pelo Node.
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+
+    // Imports terminam em .ts (exigência do Node ao executar sem build).
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+
+    // Só sintaxe que o Node consegue apagar: sem enum, namespace ou parameter property.
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    // Os testes importam o código do cliente (public/js/*.js), que é JS puro.
+    // allowJs deixa o TS inferir os tipos exportados; checkJs fica desligado para não
+    // transformar o cliente, escrito sem anotações, numa enxurrada de erros.
+    "allowJs": true,
+    "checkJs": false,
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
+}

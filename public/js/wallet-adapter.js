@@ -3,6 +3,12 @@
 // marcada "DEMO", que assina mensagens Ed25519 de verdade (verificadas pelo backend).
 // Nenhuma seed, chave privada ou senha é pedida ao usuário em nenhum momento.
 
+/**
+ * Formas usadas só para conferência de tipos (JSDoc; nada disso existe em runtime).
+ * @typedef {{ id: string, isVerumWallet?: boolean, [k: string]: any }} Provider
+ * @typedef {{ key: string, name: string, hint?: string }} Persona
+ */
+
 export const VERUM_PROVIDER_ID = 'verum-wallet';
 
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -95,6 +101,8 @@ export class DemoVerumWalletProvider {
  * WalletAdapter: isAvailable() decide a TELA 1 do convite.
  * - DEMO: o provider simulado está disponível, a menos que o teste "simular sem Verum Wallet" esteja ligado.
  * - Fora do DEMO: indisponível até existir integração real publicada pela Verum Wallet (não inventamos API).
+ *
+ * @param {{ demoMode?: boolean, simulateMissing?: boolean, personas?: Persona[], storage?: Storage | null, injected?: Provider[] }} opts
  */
 export function createWalletAdapter({ demoMode, simulateMissing = false, personas = [], storage = null, injected = [] }) {
   const providers = [...injected];

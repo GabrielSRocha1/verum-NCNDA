@@ -82,7 +82,28 @@ Todo input é validado por JSON Schema com `additionalProperties:false`; autoriz
 
 ## Comandos
 
-`npm start` · `npm run dev` (watch) · `npm test` · `npm run db:reset` · `npm run vendor` (re-copia tweetnacl/qrcode para public/vendor) · `npm run preview` (regera a pré-visualização).
+`npm start` · `npm run dev` (watch) · `npm test` · `npm run typecheck` · `npm run db:reset` · `npm run vendor` (re-copia tweetnacl/qrcode para public/vendor) · `npm run preview` (regera a pré-visualização).
+
+## Deploy — este projeto não é compilado
+
+O Node executa os `.ts` direto (type-stripping nativo, daí `engines.node: ">=22.18"`).
+Por isso os imports trazem a extensão `.ts` explícita: é o que o Node precisa para resolver
+o arquivo. **Não existe passo de build que gere JS**, e não é possível criar um sem reescrever
+todos os imports — `allowImportingTsExtensions` exige `noEmit`, e tirar as extensões quebraria
+`npm start`.
+
+Configure a plataforma assim:
+
+| | |
+|---|---|
+| Build command | `npm ci` (ou `npm ci && npm run typecheck`) |
+| Start command | `npm start` |
+| Node | 22.18+ |
+
+Se a plataforma rodar `tsc` por conta própria, o `tsconfig.json` do repositório já está
+configurado para conferir tipos sem emitir. Rodar `tsc` **sem** esse tsconfig é o que produz
+os erros `TS5097` (extensão `.ts` no import), `TS2580`/`TS2503` (`process`/`NodeJS` sem
+`@types/node`) e `TS2339` (`setTimeout().unref` com a lib do DOM no lugar da do Node).
 
 ## Pré-visualização navegável
 

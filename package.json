@@ -6,6 +6,7 @@
     "start": "node src/server.ts",
     "dev": "node --watch src/server.ts",
     "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "typecheck": "tsc --noEmit",
     "db:reset": "node scripts/reset-db.ts",
     "vendor": "node scripts/vendor.ts",
     "preview": "node preview/build.mjs",
@@ -24,5 +25,9 @@
   "type": "module",
   "engines": {
     "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2"
   }
 }
