@@ -14,7 +14,7 @@ export interface Ctx {
   limiter: RateLimiter;
 }
 
-export type ChallengePurpose = 'INVITE' | 'LOGIN' | 'AGREEMENT' | 'DOCUMENT' | 'SETTLEMENT' | 'VIEW_LINK';
+export type ChallengePurpose = 'INVITE' | 'LOGIN' | 'AGREEMENT' | 'DOCUMENT' | 'SETTLEMENT' | 'VIEW_LINK' | 'ACCESS_REQUEST';
 
 const PURPOSE_TEXT: Record<ChallengePurpose, string> = {
   INVITE: 'Prova de posse de carteira (convite)',
@@ -23,6 +23,7 @@ const PURPOSE_TEXT: Record<ChallengePurpose, string> = {
   DOCUMENT: 'Aceite de documento',
   SETTLEMENT: 'AUTORIZAR LIQUIDAÇÃO',
   VIEW_LINK: 'Prova de posse de carteira (link de visualização)',
+  ACCESS_REQUEST: 'Prova de posse de carteira (solicitação de acesso)',
 };
 
 /** Mensagem determinística assinada pela carteira. Reconstruída no servidor a partir do registro + nonce. */
@@ -132,12 +133,22 @@ export async function loginChallenge(ctx: Ctx, address: string) {
 }
 
 export async function loginVerify(ctx: Ctx, input: { challengeId: string; nonce: string; signature: string }) {
-  return ctx.db.tx(async (q) => {
-    const ch = await consumeChallenge(q, ctx, { ...input, purpose: 'LOGIN' });
+  // Erro vira `failure` em vez de throw para a transação COMMITAR: lançar aqui dentro desfaria o
+  // consumo do challenge no rollback, e ele voltaria a valer — contra o "uso único mesmo que a
+  // assinatura falhe" prometido em consumeChallenge. Mesmo padrão de inviteWalletVerify.
+  let failure: HttpError | null = null;
+  const out = await ctx.db.tx(async (q) => {
+    let ch;
+    try { ch = await consumeChallenge(q, ctx, { ...input, purpose: 'LOGIN' }); } catch (e) { failure = e as HttpError; return null; }
     const { rows } = await q.query<{ user_id: string }>(
       `SELECT w.user_id FROM wallets w WHERE w.network = $1 AND w.address = $2`, [ctx.sig.network, ch.wallet_address]);
-    if (!rows[0]) throw new HttpError(403, 'WALLET_NOT_REGISTERED', 'Carteira sem cadastro. O acesso começa por um convite privado.');
+    if (!rows[0]) {
+      failure = new HttpError(403, 'WALLET_NOT_REGISTERED', 'Carteira sem cadastro. O acesso começa por um convite privado.');
+      return null;
+    }
     await audit(q, { at: ctx.cfg.now(), userId: rows[0].user_id, action: 'LOGIN', entity: 'user', entityId: rows[0].user_id, wallet: ch.wallet_address });
     return { userId: rows[0].user_id, address: ch.wallet_address };
   });
+  if (failure) throw failure;
+  return out!;
 }

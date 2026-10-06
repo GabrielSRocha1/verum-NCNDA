@@ -17,6 +17,7 @@ import {
 } from './services/auth.ts';
 import * as inv from './services/invitations.ts';
 import * as share from './services/sharing.ts';
+import * as access from './services/access.ts';
 import * as deals from './services/deals.ts';
 import * as ps from './services/partnership.ts';
 import { seedDemo, personaDirectory } from './demo.ts';
@@ -146,6 +147,7 @@ export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS
     demoMode: cfg.demoMode, network: cfg.network, mainnetEnabled: false,
     walletDownloadUrl: cfg.verumWalletDownloadUrl || null,
     resumeWindowMinutes: cfg.resumeWindowMinutes, onboardingTtlMinutes: cfg.onboardingTtlMinutes,
+    accessRequests: cfg.accessRequests,
     walletAttestationAvailable: WALLET_ATTESTATION_AVAILABLE,
     walletDeepLinkAvailable: false,
     settlement: { adapter: ctx.settlement.id, demo: ctx.settlement.demo, protectedByContract: ctx.settlement.protectedByContract },
@@ -211,6 +213,31 @@ export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS
     return { ok: true };
   });
   app.post('/auth/logout', async (_req, reply) => { reply.clearCookie(SESSION_COOKIE, { path: '/' }); return { ok: true }; });
+
+  // ---------------------------------------------------------------- solicitação de acesso
+  // A única porta de entrada sem convite, e por isso só existe com ACCESS_REQUESTS ligado: desligado
+  // as rotas nem são registradas (404), como /api/demo/personas fora do DEMO. Solicitar não cria
+  // conta — cria conta é `npm run access approve`, rodado por quem opera o servidor.
+  if (cfg.accessRequests) {
+    app.post('/access/request/wallet-challenge', { schema: { body: obj({ address: S.address }) } }, async (req: any) => {
+      limit('authChallenge', ip(req));
+      return access.requestChallenge(ctx, req.body.address);
+    });
+    app.post('/access/request', {
+      schema: {
+        body: obj({
+          challengeId: S.uuid, nonce: S.b58, signature: S.b58,
+          fullName: { type: 'string', maxLength: 120 }, email: { type: 'string', maxLength: 254 },
+          phone: { type: 'string', maxLength: 24 }, country: { type: 'string', pattern: '^[A-Z]{2}$' },
+          organization: { type: 'string', maxLength: 120 },
+          referral: { type: 'string', maxLength: 120 }, note: { type: 'string', maxLength: 500 },
+        }, ['challengeId', 'nonce', 'signature', 'fullName', 'email', 'phone', 'country', 'organization']),
+      },
+    }, async (req: any) => {
+      limit('authVerify', ip(req));
+      return access.submitRequest(ctx, req.body);
+    });
+  }
 
   // ---------------------------------------------------------------- área autenticada
   app.get('/api/me', async (req, reply) => { const s = await auth(req, reply); return ps.profile(ctx, s.uid); });

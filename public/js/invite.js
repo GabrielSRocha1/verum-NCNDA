@@ -116,7 +116,8 @@ export function startInvite(root, token) {
     try {
       const acc = await walletPick({ title: 'Conectar Verum Wallet' });
       const ad = getAdapter();
-      ad.provider.connect(acc.key);
+      ad.use(acc.provider ?? ad.provider);
+      await ad.provider.connect(acc.key);
       const ch = await api('POST', '/invite/wallet-challenge', { token, address: acc.address });
       const signature = await walletSign(ch.message, { title: 'Prova de posse da carteira', action: 'ASSINAR' });
       await busy(async () => {

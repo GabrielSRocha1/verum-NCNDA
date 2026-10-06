@@ -7,6 +7,7 @@ import { templateLines } from '../src/services/partnership.ts';
 import { base58Encode, base58Decode, verifyEd25519, canonicalJson, newInviteCode, normalizeInviteCode, CODE_ALPHABET, safeEqualHex } from '../src/lib/crypto.ts';
 import { AssetAdapter, defaultAssetRegistry, SolanaPayQrAdapter, DemoQrAdapter, qrAdapterFor, demoMint } from '../src/adapters/index.ts';
 import { selectProvider, createWalletAdapter, DemoVerumWalletProvider } from '../public/js/wallet-adapter.js';
+import { detectVerumProviders, normalizarProvider } from '../public/js/verum-provider.js';
 import { choiceState, pctToBps } from '../public/js/onboarding-logic.js';
 import { maskEmail, maskPhone } from '../src/lib/common.ts';
 
@@ -119,6 +120,49 @@ test('12 WalletAdapter (cliente): recusa providers que não sejam a Verum Wallet
   const ok = choiceState({ walletAvailable: true, downloadUrl: 'https://x' });
   assert.equal(ok.primary, 'signup'); assert.equal(ok.signupDisabled, false); assert.equal(ok.showDownload, true);
   assert.equal(pctToBps('3,33'), 333); assert.equal(pctToBps('abc'), null);
+});
+
+test('13 Verum Wallet real: a ponte reconhece a extensão, convive com o DEMO e não adivinha API', async () => {
+  globalThis.nacl = nacl;
+  const kp = nacl.sign.keyPair();
+  const endereco = base58Encode(kp.publicKey);
+  // Extensão fictícia na forma mais comum: assíncrona, assinatura em bytes, endereço no connect.
+  const extensao = {
+    isVerumWallet: true,
+    async connect() { return { publicKey: endereco }; },
+    async signMessage(bytes: Uint8Array) { return { signature: nacl.sign.detached(bytes, kp.secretKey) }; },
+  };
+  const { providers, sonda } = detectVerumProviders({ verum: extensao } as any);
+  assert.equal(providers.length, 1);
+  assert.equal(providers[0].demo, false);
+  assert.ok(sonda.find((x: any) => x.onde === 'window.verum' && x.aceito));
+
+  // Assina de verdade, e o que sai é base58 que o servidor verifica.
+  const p = providers[0];
+  await p.connect();
+  assert.equal(p.current!.address, endereco);
+  const msg = 'VERUM NCNDA\nmensagem de teste';
+  assert.ok(verifyEd25519(endereco, msg, await p.signMessage(msg)), 'assinatura da extensão tem de validar no servidor');
+
+  // As duas carteiras convivem: a extensão NÃO apaga as personas DEMO do aparelho.
+  const ad = createWalletAdapter({ demoMode: true, injected: providers });
+  assert.equal(ad.providers.length, 2);
+  assert.equal(ad.provider, p, 'a carteira real entra como ativa');
+  const demo = ad.providers.find((x: any) => x.demo);
+  assert.ok(demo instanceof DemoVerumWalletProvider);
+  ad.use(demo); assert.equal(ad.provider, demo, 'o seletor troca a ativa');
+
+  // Forma desconhecida não vira provider adivinhado: entra na sonda com o motivo.
+  const semAssinar = detectVerumProviders({ verum: { isVerumWallet: true, connect() {} } } as any);
+  assert.equal(semAssinar.providers.length, 0);
+  assert.match(semAssinar.sonda[0].motivo!, /sem signMessage/);
+  assert.equal(normalizarProvider({ signMessage() {}, connect() {} }, 'solana'), null, 'sem marca da Verum, não é aceita');
+  // Outra carteira Solana aparece só para o diagnóstico explicar a ausência.
+  const outra = detectVerumProviders({ solana: { isPhantom: true, connect() {}, signMessage() {} } } as any);
+  assert.equal(outra.providers.length, 0);
+  assert.match(outra.sonda[0].motivo!, /somente a Verum Wallet/);
+  // Sem carteira nenhuma, o motivo é dito em vez de engolido.
+  assert.match(createWalletAdapter({ demoMode: false }).reason!, /não encontrada/);
 });
 
 function luminance(hex: string): number {

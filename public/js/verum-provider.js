@@ -1,0 +1,135 @@
+// Ponte para a Verum Wallet de verdade (extensão de navegador).
+//
+// O princípio aqui é o mesmo do resto do projeto: NÃO INVENTAR API. Esta ponte procura o objeto
+// que a extensão injeta, reconhece as formas que sabe tratar e normaliza para o contrato interno
+// (o mesmo do provider DEMO). Se achar um candidato que não casa com nenhuma forma conhecida, não
+// devolve provider: guarda o que viu para a tela de diagnóstico, e a mesa continua dizendo que a
+// carteira não está disponível — em vez de chamar métodos adivinhados e falhar de forma obscura.
+//
+// Tudo que sai daqui é assíncrono. A carteira real pede confirmação ao usuário, então connect e
+// signMessage devolvem Promise; o resto do app foi ajustado para esperar (ver core.js).
+import { VERUM_PROVIDER_ID, base58Encode } from './wallet-adapter.js';
+
+/** Onde a extensão pode se anunciar. Ordem = precedência. */
+const CANDIDATOS = ['verum', 'verumWallet', 'VerumWallet', 'verumcrypto'];
+
+const ehFuncao = (o, k) => typeof o?.[k] === 'function';
+const metodos = (o) => { try { return Object.keys(o).filter((k) => ehFuncao(o, k)).sort(); } catch { return []; } };
+
+/** Marca da Verum: ou o objeto se identifica, ou veio pelo nome reservado dela. */
+const pareceVerum = (o, nome) => !!o && (o.isVerumWallet === true || o.isVerum === true || o.id === VERUM_PROVIDER_ID || CANDIDATOS.includes(nome));
+
+/** Assinatura pode voltar como base58, bytes, ou dentro de { signature }. Normaliza para base58. */
+function paraBase58(resultado) {
+  const v = resultado?.signature ?? resultado;
+  if (typeof v === 'string') return v;
+  if (v instanceof Uint8Array) return base58Encode(v);
+  if (Array.isArray(v)) return base58Encode(Uint8Array.from(v));
+  if (v?.buffer instanceof ArrayBuffer) return base58Encode(new Uint8Array(v.buffer, v.byteOffset ?? 0, v.byteLength));
+  throw new Error('A Verum Wallet devolveu a assinatura num formato que esta mesa não reconhece.');
+}
+
+/** Endereço pode vir como string, { address }, { publicKey } ou PublicKey com toBase58(). */
+function paraEndereco(v) {
+  const p = v?.address ?? v?.publicKey ?? v;
+  if (typeof p === 'string') return p;
+  if (ehFuncao(p, 'toBase58')) return p.toBase58();
+  if (typeof p?.toString === 'function' && !(p instanceof Object.getPrototypeOf(Object))) {
+    const s = String(p);
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s)) return s;
+  }
+  return null;
+}
+
+/**
+ * Normaliza um objeto injetado para o contrato interno. Devolve null quando a forma não é
+ * reconhecida — quem chama registra o motivo para o diagnóstico.
+ */
+export function normalizarProvider(bruto, nome) {
+  if (!pareceVerum(bruto, nome) || !ehFuncao(bruto, 'signMessage')) return null;
+  const conectar = ['connect', 'enable', 'requestAccounts'].find((k) => ehFuncao(bruto, k));
+  if (!conectar) return null;
+
+  const p = {
+    id: VERUM_PROVIDER_ID,
+    isVerumWallet: true,
+    demo: false,
+    origem: nome,
+    label: bruto.label ?? 'Verum Wallet',
+    /** @type {{ key: string, address: string, name: string, kind: string } | null} */
+    current: /** @type {any} */ (null),
+    bruto,
+    async connect() {
+      const r = await bruto[conectar]();
+      const address = paraEndereco(r) ?? paraEndereco(bruto);
+      if (!address) throw new Error('A Verum Wallet conectou mas não informou o endereço da carteira.');
+      p.current = { key: address, address, name: 'Verum Wallet', kind: 'verum' };
+      return p.current;
+    },
+    /** A extensão expõe a conta ativa, não uma lista: conectar é o que revela qual é. */
+    async accounts() {
+      if (!p.current) { try { await p.connect(); } catch { return []; } }
+      return p.current ? [p.current] : [];
+    },
+    async signMessage(message) {
+      if (!p.current) await p.connect();
+      const bytes = new TextEncoder().encode(message);
+      // Algumas carteiras recebem texto, outras bytes. Tenta bytes (padrão Solana) e cai para texto.
+      let r;
+      try { r = await bruto.signMessage(bytes, 'utf8'); }
+      catch (e) {
+        if (/string|text|argument|invalid/i.test(String(e?.message ?? ''))) r = await bruto.signMessage(message);
+        else throw e;
+      }
+      return paraBase58(r);
+    },
+  };
+  return p;
+}
+
+/**
+ * Varre o ambiente. Devolve { providers, sonda } — a sonda é o retrato do que foi visto, para a
+ * tela de diagnóstico mostrar por que uma carteira presente não foi aceita.
+ */
+export function detectVerumProviders(escopo = globalThis) {
+  const providers = [];
+  const sonda = [];
+  for (const nome of CANDIDATOS) {
+    const bruto = escopo?.[nome];
+    if (!bruto || typeof bruto !== 'object') continue;
+    const p = normalizarProvider(bruto, nome);
+    sonda.push({
+      onde: `window.${nome}`,
+      aceito: !!p,
+      motivo: p ? null : (!ehFuncao(bruto, 'signMessage') ? 'sem signMessage' : 'sem connect/enable/requestAccounts'),
+      metodos: metodos(bruto),
+    });
+    if (p) providers.push(p);
+  }
+  // Outras carteiras Solana (Phantom, Solflare) são deliberadamente ignoradas: esta mesa aceita
+  // somente a Verum Wallet. Aparecem na sonda só para o diagnóstico explicar a ausência.
+  const outra = escopo?.solana;
+  if (outra && typeof outra === 'object' && !pareceVerum(outra, 'solana')) {
+    sonda.push({ onde: 'window.solana', aceito: false, motivo: 'outra carteira: a mesa aceita somente a Verum Wallet', metodos: metodos(outra) });
+  }
+  return { providers, sonda };
+}
+
+/**
+ * A extensão pode injetar depois do primeiro render. Chama de volta quando algo novo aparecer,
+ * no máximo uma vez, para a tela se refazer com a carteira já disponível.
+ */
+export function onVerumReady(cb, escopo = globalThis) {
+  if (detectVerumProviders(escopo).providers.length) return () => {};
+  let feito = false;
+  const disparar = () => { if (feito) return; if (!detectVerumProviders(escopo).providers.length) return; feito = true; parar(); cb(); };
+  const eventos = ['verum#initialized', 'verum:ready', 'wallet-standard:register-wallet'];
+  for (const e of eventos) escopo.addEventListener?.(e, disparar);
+  const timer = escopo.setInterval?.(disparar, 400);
+  const prazo = escopo.setTimeout?.(() => parar(), 5000);     // extensão que não chega em 5s não vem
+  function parar() {
+    for (const e of eventos) escopo.removeEventListener?.(e, disparar);
+    escopo.clearInterval?.(timer); escopo.clearTimeout?.(prazo);
+  }
+  return parar;
+}

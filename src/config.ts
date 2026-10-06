@@ -20,6 +20,7 @@ export interface AppConfig {
   sessionTtlMinutes: number;
   sessionMaxHours: number;
   verumWalletDownloadUrl: string;
+  accessRequests: boolean;       // formulário público de solicitação de acesso ligado?
   rateLimits: Record<'open' | 'resume' | 'verifyCode' | 'walletChallenge' | 'walletVerify' | 'authChallenge' | 'authVerify', RateLimitRule>;
   now: () => Date;
 }
@@ -81,6 +82,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     sessionTtlMinutes: int(env.SESSION_TTL_MINUTES, 15, 5, 120),
     sessionMaxHours: int(env.SESSION_MAX_HOURS, 12, 1, 72),
     verumWalletDownloadUrl: (env.VERUM_WALLET_DOWNLOAD_URL ?? '').trim(),
+    // Desligado por padrão: é a única porta de entrada sem convite, e só deve existir enquanto
+    // você estiver de fato recebendo solicitações.
+    accessRequests: bool(env.ACCESS_REQUESTS, false),
     rateLimits: {
       open: { max: 10, windowMs: 60_000 },
       resume: { max: 20, windowMs: 60_000 },

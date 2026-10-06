@@ -12,7 +12,7 @@ Requisitos: Node.js 22.18+ (executa TypeScript nativamente; não há etapa de bu
 npm install
 cp .env.example .env        # ajuste COOKIE_SECURE=false para http://localhost
 npm start                   # http://localhost:8787
-npm test                    # 52 testes (motor de comissões, onboarding 3.9, parceria/banco/settlement)
+npm test                    # 61 testes (motor de comissões, onboarding 3.9, parceria/banco/settlement)
 npm run db:reset            # apaga o banco local; o próximo "npm start" recria o DEMO
 ```
 
@@ -43,6 +43,7 @@ public/            PWA (mobile-first 360px, desktop com sidebar). Sem CDN: tweet
   js/invite.js     fluxo do parceiro a partir de /i/:token (TELAS 0–5)
   js/core.js       DOM seguro (sem innerHTML), API, bottom sheet, carteira DEMO, assinaturas
   js/wallet-adapter.js  WalletAdapter do cliente: aceita SOMENTE o provider da Verum Wallet
+  js/verum-provider.js  ponte para a extensão real: detecta, normaliza o que reconhece e não inventa API
   js/components.js      Card de Qualificação, Card de Parceiro, sheet de QR, sheet de convite
 src/
   app.ts           Fastify: rotas, schemas (additionalProperties:false, sem removeAdditional), headers de segurança, rate limit
@@ -51,11 +52,11 @@ src/
   lib/bps.ts       motor de grade/comissões: bps inteiros, BigInt, resíduo explícito, nunca float
   lib/crypto.ts    token 256 bits, código VOTC, HMAC/tempo constante, base58, Ed25519, JSON canônico
   adapters/        SignatureAdapter, AssetAdapter (registry), QrPayloadAdapter (Solana Pay), SettlementAdapter (DEMO), BlockchainAdapter
-  services/        auth (challenge/nonce/sessão), invitations (uso único), sharing (link de visualização só-leitura), deals (views com privacidade), partnership (ofertas, linhas, versões, assinaturas, settlement, documentos)
+  services/        auth (challenge/nonce/sessão), invitations (uso único), sharing (link de visualização só-leitura), access (solicitação de acesso), deals (views com privacidade), partnership (ofertas, linhas, versões, assinaturas, settlement, documentos)
   demo.ts          personas e mesas DEMO (chaves derivadas de sementes PÚBLICAS)
-migrations/        001_schema.sql (20 entidades) · 002_guards.sql (triggers de integridade) · 003_view_link.sql (link de visualização) · 004_view_link_signup.sql (cadastro de visualizador)
+migrations/        001_schema.sql (20 entidades) · 002_guards.sql (triggers de integridade) · 003_view_link.sql (link de visualização) · 004_view_link_signup.sql (cadastro de visualizador) · 005_access_requests.sql (solicitação de acesso)
 docs/              ARQUITETURA, ADR-001, SEGURANCA (checklist), DEVNET
-test/              52 testes (node --test)
+test/              61 testes (node --test)
 ```
 
 Separação OFF-CHAIN × ON-CHAIN: cadastro, convite, documentos, Deal Room, workflow e auditoria são off-chain. Carteira, assinatura, regras econômicas, escrow, settlement e distribuição ficam atrás de adapters; nesta entrega o único adapter de settlement é o **DEMO_SIMULATED** (nada se move, nenhum selo de proteção é exibido).
@@ -73,11 +74,34 @@ Login sem senha: `POST /auth/wallet-challenge` · `POST /auth/wallet-verify` · 
 Link de visualização da mesa — admin: `GET/POST /api/deals/:id/share-link` · `POST /api/deals/:id/share-link/regenerate` · `GET /api/deals/:id/viewers`.
 Link de visualização — quem abre: `POST /api/shared/:token/wallet-challenge` · `POST /api/shared/:token/wallet-verify` · `GET /api/shared/:token/gate` · `POST /api/shared/:token/register` · e as leituras `GET /api/shared/:token[/history|/compliance|/documents|/documents/:vid/content|/settlement/preview]`.
 
+Solicitação de acesso (só com `ACCESS_REQUESTS=on`): `POST /access/request/wallet-challenge` · `POST /access/request`.
+
 Todo input é validado por JSON Schema com `additionalProperties:false`; autorização é por operação (admin ou participante com convite concluído); respostas de convite inválido são sempre a mesma mensagem.
+
+## Como entra o PRIMEIRO Pay Master
+
+Não há cadastro público, e todo convite depende de uma mesa que já tem admin — então o primeiro não tem de quem receber convite. O caminho é solicitação + aprovação fora da web:
+
+1. Ligue `ACCESS_REQUESTS=on`. Um botão discreto ("Solicitar cadastro") aparece na tela de login.
+2. A pessoa preenche nome, e-mail, telefone, país, organização, quem indicou e uma observação, e **assina com a carteira** — é isso que comprova que o endereço é dela. Enviar **não cria conta**: enquanto está pendente, aquela carteira continua sem acesso.
+3. Você decide no servidor:
+
+```bash
+npm run access -- list
+npm run access -- approve <id|e-mail|carteira> --por="seu nome"
+npm run access -- reject  <id> --motivo="..."
+npm run access -- purge   --dias=90     # descarta recusadas antigas (LGPD)
+```
+
+Aprovar cria usuário + carteira numa transação. **É o único caminho do sistema que cria conta sem convite**, e por isso só existe por comando, nunca por rota HTTP. A conta nasce com `origin='INVITE'`: abre mesa própria e convida — diferente do cadastro por link de visualização, que nasce `VIEW_LINK` e só lê.
+
+A partir daí o primeiro Pay Master entra sozinho pela Verum Wallet, cria a mesa e gera os convites para os indicados, pelo fluxo que já existia.
+
+Com banco local (PGlite) **pare o servidor antes de gravar pelo comando** — é de processo único, e o próprio comando avisa. Com `DATABASE_URL` (Postgres de servidor) não há esse limite.
 
 ## Limites honestos
 
-- **Verum Wallet**: não existe API pública de provider web documentada. O cliente aceita somente `id: 'verum-wallet'`; em DEMO há um provider simulado que assina Ed25519 de verdade. O servidor não consegue saber qual software gerou a assinatura; a UI **não** afirma "autocustódia verificada". Deep link "Abrir na Verum Wallet" fica oculto até existir um real.
+- **Verum Wallet**: o cliente aceita somente `id: 'verum-wallet'`. `public/js/verum-provider.js` é a ponte para a extensão real: procura o objeto injetado (`window.verum` e variantes), reconhece as formas que sabe tratar e normaliza para o contrato interno — mas **não inventa API**. Forma desconhecida não vira provider adivinhado: entra no Diagnóstico (Perfil → Carteira), que mostra o que foi encontrado, o que foi recusado e por quê. Em DEMO o provider simulado continua existindo e **convive** com a extensão: o seletor mostra as duas. O servidor não consegue saber qual software gerou a assinatura; a UI **não** afirma "autocustódia verificada". Deep link segue oculto (extensão não tem; app de celular não está implementado).
 - **Solana Devnet / contrato**: não implementados nesta entrega (fases 13/14). `SOLANA_NETWORK=solana-devnet` é aceito pela configuração, mas o adapter de blockchain se declara indisponível. Veja `docs/DEVNET.md` e `docs/ADR-001-distribuicao-n-participantes.md`.
 - **Mainnet**: recusada. Só depois de testes, revisão de segurança, auditoria independente e autorização explícita.
 - **Postgres de servidor**: incluído (`node-postgres`, ligado por `DATABASE_URL`) e exercitado pelo protocolo real do Postgres — migrations, transações com rollback, seed DEMO e o fluxo inteiro do convite. O que **não** foi exercitado é um provedor específico: TLS com CA do provedor, comportamento do pooler sob carga e limites de conexão só se confirmam no ambiente de verdade.
@@ -86,7 +110,7 @@ Todo input é validado por JSON Schema com `additionalProperties:false`; autoriz
 
 ## Comandos
 
-`npm start` · `npm run dev` (watch) · `npm test` · `npm run typecheck` · `npm run db:reset` · `npm run db:setup` (prepara um banco compartilhado: migrations + seed DEMO) · `npm run vendor` (re-copia tweetnacl/qrcode para public/vendor) · `npm run preview` (regera a pré-visualização).
+`npm start` · `npm run dev` (watch) · `npm test` · `npm run typecheck` · `npm run db:reset` · `npm run db:setup` (prepara um banco compartilhado: migrations + seed DEMO) · `npm run access` (solicitações de acesso: list/approve/reject/purge) · `npm run vendor` (re-copia tweetnacl/qrcode para public/vendor) · `npm run preview` (regera a pré-visualização).
 
 ## Deploy — este projeto não é compilado
 

@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "db:reset": "node scripts/reset-db.ts",
     "db:setup": "node scripts/db-setup.ts",
+    "access": "node scripts/access.ts",
     "vendor": "node scripts/vendor.ts",
     "preview": "node preview/build.mjs",
     "preview:check": "node preview/build.mjs --check"

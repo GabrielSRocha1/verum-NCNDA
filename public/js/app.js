@@ -1,7 +1,7 @@
 // VERUM NCNDA PRIVATE DAPP — cliente (PWA). Roteamento por hash; convite em /i/:token.
 import {
   h, add, clear, icon, api, toast, copy, openSheet, qrSvg, state, brand, getAdapter, walletLogin, walletSign, signFlow,
-  walletViewLink,
+  walletViewLink, walletPick,
   ensureWalletForMe, fmtDate, short, STATUS_PT, ACTION_PT,
 } from './core.js';
 import { qualCard, partnerCard, openQrSheet, openInviteSheet, showInviteResult, commissionTable, legChips } from './components.js';
@@ -60,6 +60,8 @@ async function render() {
   // Link de visualização: a entrada é pelo próprio link, não pelo login da mesa — quem recebeu o
   // link pode nem ter cadastro ainda. Sem este desvio, cairia no login e seria recusado.
   if (!state.me && route.name === 'm' && route.id) { root.append(await viewerLinkPage(route.id)); return; }
+  // Solicitação de acesso: por definição, quem abre ainda não tem cadastro — fora do shell também.
+  if (!state.me && route.name === 'solicitar') { root.append(accessRequestPage()); return; }
   if (!state.me) { root.append(loginPage()); return; }
   const main = h('main', { class: 'main', id: 'main' });
   root.append(h('div', { class: 'shell' }, sidebar(route), main), bottomNav(route));
@@ -87,6 +89,9 @@ function pageFor(r) {
     case 'carteira': return walletPage();
     case 'perfil': return profilePage();
     case 'convites': return invitesPage();
+    case 'solicitar': return Promise.resolve(h('div', {}, pageHead('Solicitar cadastro'),
+      h('div', { class: 'empty-state' }, 'Você já tem cadastro nesta mesa — não precisa solicitar acesso.',
+        h('div', { style: 'margin-top:12px' }, h('a', { class: 'btn btn-ghost btn-sm', href: '#/dashboard' }, 'Ir para o Dashboard')))));
     case 'participantes': return pickDealPage('participantes', 'Participantes', 'Quem ocupa cada função, o percentual travado de cada um e quem já assinou. Escolha a mesa.');
     case 'documentos': return pickDealPage('documentos', 'Documentos', 'Documentos ficam dentro de cada Deal Room, com versão, hash e aceites.');
     case 'compliance': return pickDealPage('compliance', 'Compliance', 'Status apenas informativos. A Verum NCNDA não emite aprovação regulatória nem garante legalidade de operações.');
@@ -154,7 +159,79 @@ function loginPage() {
     }, 'BAIXAR VERUM WALLET'), err,
     state.config?.demoMode ? h('div', { class: 'notice notice-info', style: 'margin-top:20px' },
       'DEMO: entre como Rafael Monteiro (Pay Master 01, admin) para ver as três mesas. As demais personas são os parceiros das mesas.') : null,
-    h('p', { class: 'small muted', style: 'margin-top:20px' }, 'A mesa nunca pede seed, chave privada ou senha. Não é exchange, corretora nem marketplace aberto.'));
+    h('p', { class: 'small muted', style: 'margin-top:20px' }, 'A mesa nunca pede seed, chave privada ou senha. Não é exchange, corretora nem marketplace aberto.'),
+    // Porta de entrada de quem ainda não tem convite: discreta de propósito, e só quando o
+    // responsável pela mesa ligou o recebimento de solicitações.
+    state.config?.accessRequests ? h('p', { class: 'small muted', style: 'margin-top:18px;text-align:center' },
+      'Ainda não tem acesso? ', h('a', { href: '#/solicitar' }, 'Solicitar cadastro')) : null);
+}
+
+const PAISES = [['BR', 'Brasil'], ['PY', 'Paraguai'], ['AR', 'Argentina'], ['UY', 'Uruguai'], ['US', 'Estados Unidos'], ['PT', 'Portugal'], ['AE', 'Emirados Árabes'], ['CH', 'Suíça']];
+
+/**
+ * Solicitação de acesso: como entra quem não tem de quem receber convite — o primeiro Pay Master.
+ * Enviar NÃO cria conta: cria conta é o responsável pela mesa, pelo comando, depois de ler quem é.
+ * A carteira é comprovada por assinatura aqui, para ninguém cadastrar o endereço de outra pessoa.
+ */
+function accessRequestPage() {
+  const err = h('p', { class: 'form-error', role: 'alert' });
+  const f = {
+    fullName: h('input', { autocomplete: 'name', required: true, maxlength: '120' }),
+    email: h('input', { type: 'email', autocomplete: 'email', required: true, maxlength: '254' }),
+    phone: h('input', { type: 'tel', autocomplete: 'tel', required: true, placeholder: '+55 11 91234-5678', maxlength: '24' }),
+    country: h('select', {}, PAISES.map(([v, l]) => h('option', { value: v }, l))),
+    organization: h('input', { required: true, maxlength: '120', placeholder: 'Empresa ou mesa que você representa' }),
+    referral: h('input', { maxlength: '120', placeholder: 'Nome de quem indicou (opcional)' }),
+    note: h('textarea', { maxlength: '500', rows: '3', placeholder: 'O que você pretende operar (opcional)' }),
+  };
+  const btn = h('button', { class: 'btn btn-primary btn-block' }, 'CONECTAR CARTEIRA E ENVIAR');
+  const pronto = () => clear(document.getElementById('app')).append(
+    h('main', { class: 'gate' }, brand('Solicitação enviada'),
+      h('h1', {}, 'Solicitação registrada'),
+      h('p', { class: 'lead' }, 'Seus dados e a carteira que você assinou ficaram registrados. O responsável pela mesa analisa e, se aprovar, você passa a entrar direto pela Verum Wallet — sem senha e sem novo cadastro.'),
+      h('p', { class: 'small muted', style: 'margin-top:14px' }, 'Nada foi criado ainda: enquanto não houver aprovação, esta carteira não tem acesso.'),
+      h('a', { class: 'btn btn-ghost btn-block', style: 'margin-top:18px', href: '#/home' }, 'VOLTAR')));
+
+  const enviar = async (e) => {
+    e.preventDefault();
+    err.textContent = ''; btn.disabled = true;
+    try {
+      const dados = {
+        fullName: f.fullName.value, email: f.email.value, phone: f.phone.value, country: f.country.value,
+        organization: f.organization.value,
+        ...(f.referral.value.trim() ? { referral: f.referral.value.trim() } : {}),
+        ...(f.note.value.trim() ? { note: f.note.value.trim() } : {}),
+      };
+      // allowCreate: o botão de criar carteira só aparece quando existe a carteira DEMO neste
+      // aparelho — com a extensão real, o seletor mostra apenas a conta dela.
+      const acc = await walletPick({ title: 'Conectar Verum Wallet' });
+      const ad = getAdapter();
+      ad.use(acc.provider ?? ad.provider);
+      await ad.provider.connect(acc.key);
+      const ch = await api('POST', '/access/request/wallet-challenge', { address: acc.address });
+      const signature = await walletSign(ch.message, { title: 'Prova de posse da carteira', action: 'ASSINAR E ENVIAR' });
+      await api('POST', '/access/request', { challengeId: ch.challengeId, nonce: ch.nonce, signature, ...dados });
+      pronto();
+    } catch (ex) {
+      if (ex.code !== 'CANCELLED') err.textContent = ex.message;
+      btn.disabled = false;
+    }
+  };
+
+  return h('main', { class: 'gate' }, brand('Solicitação de acesso'),
+    h('h1', {}, 'Solicitar cadastro'),
+    h('p', { class: 'lead' }, 'Esta mesa é privada e não tem cadastro aberto. Conte quem você é e qual carteira vai usar: o responsável analisa e, se aprovar, você entra assinando com a Verum Wallet.'),
+    h('form', { onsubmit: enviar },
+      h('label', { class: 'field' }, h('span', {}, 'Nome completo'), f.fullName),
+      h('label', { class: 'field' }, h('span', {}, 'E-mail'), f.email),
+      h('label', { class: 'field' }, h('span', {}, 'Telefone / WhatsApp'), f.phone),
+      h('label', { class: 'field' }, h('span', {}, 'País'), f.country),
+      h('label', { class: 'field' }, h('span', {}, 'Organização'), f.organization),
+      h('label', { class: 'field' }, h('span', {}, 'Quem indicou você'), f.referral),
+      h('label', { class: 'field' }, h('span', {}, 'Observação'), f.note),
+      err, btn),
+    h('p', { class: 'small muted', style: 'margin-top:14px' }, 'Ao enviar você assina uma mensagem que prova que a carteira é sua. Não é transação e não movimenta fundos. A mesa nunca pede seed, chave privada ou senha.'),
+    state.config?.demoMode ? h('p', { class: 'small muted', style: 'margin-top:26px;text-align:center' }, 'DEMO / TESTNET — NO REAL FUNDS') : null);
 }
 
 // ================================================================= Home e listas
@@ -483,21 +560,28 @@ function tabResumo(d) {
 /** DEMO: as personas pendentes assinam com as chaves DEMO deste aparelho; depois volta para a sessão original. */
 async function demoCollect(d) {
   const ad = getAdapter();
-  const accs = ad.provider.accounts();
+  // Só o provider DEMO: as personas têm chaves derivadas de sementes públicas, que a carteira real
+  // não possui. Com a extensão instalada, `ad.provider` pode ser ela — assinar por aqui falharia.
+  const demo = ad.providers.find((p) => p.demo);
+  if (!demo) { toast('Este atalho só existe com a carteira DEMO.', 'err'); return; }
+  const accs = await demo.accounts();
   const pending = d.participants.filter((p) => p.filled && !p.signed && !p.isMe && accs.some((a) => a.address === p.wallet));
   if (!pending.length) { toast('Nenhuma persona DEMO pendente neste aparelho.', 'err'); return; }
   const original = state.me.wallet;
   const loginAs = async (addr) => {
     const acc = accs.find((a) => a.address === addr);
-    ad.provider.connect(acc.key);
+    await demo.connect(acc.key);
     const ch = await api('POST', '/auth/wallet-challenge', { address: addr });
-    await api('POST', '/auth/wallet-verify', { challengeId: ch.challengeId, nonce: ch.nonce, signature: ad.provider.signMessage(ch.message) });
+    // A assinatura é AGUARDADA antes de entrar no corpo: mandar a Promise direta enviaria {}.
+    const signature = await demo.signMessage(ch.message);
+    await api('POST', '/auth/wallet-verify', { challengeId: ch.challengeId, nonce: ch.nonce, signature });
   };
   try {
     for (const p of pending) {
       await loginAs(p.wallet);
       const ch = await api('POST', `/api/deals/${d.id}/agreement/challenge`);
-      await api('POST', `/api/deals/${d.id}/agreement/sign`, { challengeId: ch.challengeId, nonce: ch.nonce, signature: ad.provider.signMessage(ch.message) });
+      const signature = await demo.signMessage(ch.message);
+      await api('POST', `/api/deals/${d.id}/agreement/sign`, { challengeId: ch.challengeId, nonce: ch.nonce, signature });
     }
     toast(`${pending.length} persona(s) assinaram (DEMO).`);
   } catch (e) { toast(e.message, 'err'); }
@@ -918,7 +1002,31 @@ function walletPage() {
         h('dt', {}, 'Mainnet'), h('dd', {}, 'Desligada'))),
     h('p', { class: 'notice notice-info', style: 'margin-top:14px' },
       'A exigência da Verum Wallet é aplicada neste aparelho. O servidor verifica a assinatura com a sua chave pública, mas não consegue identificar qual software a gerou — por isso a mesa não afirma que a autocustódia foi "verificada".'),
-    h('p', { class: 'small muted', style: 'margin-top:12px' }, 'A Verum nunca guarda fundos, seed, chave privada ou senha.'));
+    h('p', { class: 'small muted', style: 'margin-top:12px' }, 'A Verum nunca guarda fundos, seed, chave privada ou senha.'),
+    walletDiagnostico(ad));
+}
+
+/**
+ * O que este aparelho enxerga. Existe porque "carteira não encontrada" não diz nada a quem tem a
+ * extensão instalada: aqui aparece o que foi detectado, o que foi recusado e por quê — é com isto
+ * que se descobre o formato de uma extensão nova, em vez de adivinhar a API dela.
+ */
+function walletDiagnostico(ad) {
+  const linha = (rotulo, valor, classe) => h('div', { class: 'row small' }, h('span', { class: 'muted' }, rotulo), h('span', { class: classe || '' }, valor));
+  return h('details', { class: 'panel', style: 'margin-top:14px' },
+    h('summary', { class: 'small muted' }, 'Diagnóstico da carteira'),
+    h('div', { style: 'margin-top:10px' },
+      linha('Carteiras aceitas', ad.providers.length ? ad.providers.map((p) => p.label ?? 'Verum Wallet').join(' · ') : 'nenhuma'),
+      linha('Ativa agora', ad.provider ? `${ad.provider.label ?? 'Verum Wallet'}${ad.provider.demo ? ' (simulada)' : ''}` : '—'),
+      ad.reason ? linha('Motivo', ad.reason, 'muted') : null,
+      h('div', { class: 'section-title', style: 'margin-top:12px' }, h('h2', { style: 'font-size:13px' }, 'O que foi encontrado no navegador')),
+      (ad.probe ?? []).length
+        ? h('div', { class: 'list' }, ad.probe.map((x) => h('div', {},
+          h('div', { class: 'row small' }, h('span', { class: 'mono' }, x.onde), h('span', { class: `chip ${x.aceito ? 'chip-ok' : 'chip-status'}` }, x.aceito ? 'aceita' : 'recusada')),
+          x.motivo ? h('div', { class: 'small muted' }, x.motivo) : null,
+          x.metodos?.length ? h('div', { class: 'hash', style: 'margin-top:4px' }, x.metodos.join(', ')) : null)))
+        : h('p', { class: 'small muted' }, 'Nenhuma carteira injetada neste navegador. A extensão da Verum Wallet se anuncia em window.verum.'),
+      h('p', { class: 'small muted', style: 'margin-top:10px' }, 'A mesa aceita somente a Verum Wallet: outras carteiras aparecem aqui apenas para explicar por que não foram usadas.')));
 }
 
 async function profilePage() {

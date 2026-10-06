@@ -104,14 +104,27 @@ export class DemoVerumWalletProvider {
  *
  * @param {{ demoMode?: boolean, simulateMissing?: boolean, personas?: Persona[], storage?: Storage | null, injected?: Provider[] }} opts
  */
-export function createWalletAdapter({ demoMode, simulateMissing = false, personas = [], storage = null, injected = [] }) {
-  const providers = [...injected];
-  if (demoMode) providers.push(new DemoVerumWalletProvider({ personas, storage }));
-  let provider = null;
-  try { provider = selectProvider(providers); } catch { provider = null; }
-  return {
-    provider,
-    isAvailable: () => !!provider && !simulateMissing,
+export function createWalletAdapter({ demoMode, simulateMissing = false, personas = [], storage = null, injected = [], probe = [] }) {
+  // Os aceitos ficam TODOS disponíveis, em vez de só o primeiro: com a extensão real instalada e o
+  // DEMO ligado, as duas convivem e o seletor mostra as duas. Antes o injetado eliminava o DEMO e
+  // as personas sumiam do aparelho — o roteiro de demonstração parava de funcionar.
+  const candidatos = [...injected];
+  if (demoMode) candidatos.push(new DemoVerumWalletProvider({ personas, storage }));
+  const providers = candidatos.filter((x) => x && x.id === VERUM_PROVIDER_ID && x.isVerumWallet === true);
+  const recusados = candidatos.length - providers.length;
+  const ad = {
+    providers,
+    provider: providers[0] ?? null,                       // ativo; o seletor troca ao escolher a conta
+    use(p) { if (providers.includes(p)) ad.provider = p; return ad.provider; },
+    isAvailable: () => !!ad.provider && !simulateMissing,
     attestation: null, // não existe mecanismo de atestação: nunca afirmar "autocustódia verificada"
+    // Por que não há carteira: antes o motivo era engolido no catch e a tela só dizia "não
+    // encontrada". O diagnóstico (Perfil → Carteira) lê isto.
+    probe,
+    reason: providers.length ? null
+      : recusados ? 'Somente a Verum Wallet pode conectar nesta mesa.'
+        : demoMode ? 'Nenhuma carteira disponível.'
+          : 'Verum Wallet não encontrada neste aparelho.',
   };
+  return ad;
 }

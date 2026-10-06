@@ -202,10 +202,17 @@ export async function viewerChallenge(ctx: Ctx, token: string, address: string) 
  * identificação, e é lá que o cadastro nasce — aqui nada é criado.
  */
 export async function viewerVerify(ctx: Ctx, token: string, input: { challengeId: string; nonce: string; signature: string }) {
-  return ctx.db.tx(async (q) => {
-    await dealByToken(q, token);
-    const ch = await consumeChallenge(q, ctx, { ...input, purpose: 'VIEW_LINK' });
-    const { rows } = await q.query<any>(`SELECT user_id FROM wallets WHERE network = $1 AND address = $2`, [ctx.sig.network, ch.wallet_address]);
-    return { address: ch.wallet_address as string, userId: (rows[0]?.user_id as string) ?? null };
+  // Erro vira `failure` para a transação commitar e o challenge continuar consumido mesmo quando a
+  // assinatura falha (ver consumeChallenge). Lançar aqui dentro devolveria o challenge ao jogo.
+  let failure: HttpError | null = null;
+  const out = await ctx.db.tx(async (q) => {
+    try {
+      await dealByToken(q, token);
+      const ch = await consumeChallenge(q, ctx, { ...input, purpose: 'VIEW_LINK' });
+      const { rows } = await q.query<any>(`SELECT user_id FROM wallets WHERE network = $1 AND address = $2`, [ctx.sig.network, ch.wallet_address]);
+      return { address: ch.wallet_address as string, userId: (rows[0]?.user_id as string) ?? null };
+    } catch (e) { failure = e as HttpError; return null; }
   });
+  if (failure) throw failure;
+  return out!;
 }

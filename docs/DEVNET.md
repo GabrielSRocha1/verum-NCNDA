@@ -10,6 +10,6 @@ A integração real com Solana Devnet (conexão da Verum Wallet, Partnership on-
 
 ## Próximos passos (fase 13/14/20)
 1. Implementar `SolanaDevnetBlockchainAdapter` com RPC `https://api.devnet.solana.com` (consultar saldo/ATA, confirmar transações).
-2. Integrar o provider real da Verum Wallet quando a Verum publicar a API web (`connect`, `signMessage`, `signTransaction`); manter `selectProvider` aceitando somente esse provider.
+2. ~~Integrar o provider real da Verum Wallet~~ — a ponte existe: `public/js/verum-provider.js` detecta a extensão (`window.verum` e variantes), aceita `connect`/`enable`/`requestAccounts` e `signMessage` assíncronos, e normaliza assinatura em bytes ou base58. `selectProvider` continua aceitando somente `id: 'verum-wallet'` com `isVerumWallet === true`. Falta confirmar a forma real contra a extensão publicada: o Diagnóstico (Perfil → Carteira) mostra o que o navegador expõe, e forma não reconhecida **não** vira provider adivinhado. `signTransaction` segue fora de escopo — a mesa só assina mensagem.
 3. Módulo v2 do contrato (ver ADR-001), implantado apenas na Devnet; `SettlementAdapter` real com `protectedByContract=true` somente quando o endereço de pagamento for o do contrato.
 4. Nunca deploy automático em mainnet.
