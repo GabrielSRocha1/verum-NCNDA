@@ -105,6 +105,22 @@ configurado para conferir tipos sem emitir. Rodar `tsc` **sem** esse tsconfig é
 os erros `TS5097` (extensão `.ts` no import), `TS2580`/`TS2503` (`process`/`NodeJS` sem
 `@types/node`) e `TS2339` (`setTimeout().unref` com a lib do DOM no lugar da do Node).
 
+### `typescript` e `@types/node` estão em `dependencies` de propósito
+
+Não mova para `devDependencies`. Plataformas de deploy costumam instalar só produção
+(`NODE_ENV=production` ou `npm ci --omit=dev`) e **ainda assim** rodar `tsc` ao encontrar um
+`tsconfig.json` — e aí o build quebra com:
+
+```
+error TS2688: Cannot find type definition file for 'node'.
+```
+
+Com os dois em `dependencies`, o typecheck funciona em qualquer modo de instalação. O custo é
+alguns MB no install de produção; o runtime não usa nenhum dos dois, porque quem apaga os
+tipos é o próprio Node. Se você controla o comando de build da plataforma e prefere a
+arrumação canônica, mova os dois para `devDependencies` e use
+`npm ci --include=dev && npm run typecheck`.
+
 ## Pré-visualização navegável
 
 `preview/index.html` é um **arquivo gerado**: um HTML único que roda sem servidor e sem
