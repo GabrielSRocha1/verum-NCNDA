@@ -16,6 +16,7 @@ import {
   type Ctx, SESSION_COOKIE, makeSessionCookie, readSessionCookie, loginChallenge, loginVerify, type Session,
 } from './services/auth.ts';
 import * as inv from './services/invitations.ts';
+import * as share from './services/sharing.ts';
 import * as deals from './services/deals.ts';
 import * as ps from './services/partnership.ts';
 import { seedDemo, personaDirectory } from './demo.ts';
@@ -93,6 +94,11 @@ export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS
     }
     if (err.validation) return reply.status(400).send({ error: 'VALIDATION', message: 'Dados inválidos ou campos não permitidos.' });
     if (err.statusCode === 413) return reply.status(413).send({ error: 'TOO_LARGE', message: 'Conteúdo acima do limite.' });
+    // Erro do cliente detectado pelo próprio Fastify (corpo JSON vazio ou malformado, content-type
+    // incompatível). Sem isto vira 500 "erro inesperado": culpa trocada e log sujo de alarme falso.
+    if (typeof err.statusCode === 'number' && err.statusCode >= 400 && err.statusCode < 500) {
+      return reply.status(err.statusCode).send({ error: 'BAD_REQUEST', message: 'Requisição malformada.' });
+    }
     const code = dbErrorCode(err);
     if (code && ['LOCKED_VERSION', 'VERSION_IMMUTABLE', 'INVITE_IMMUTABLE', 'INVITE_TERMINAL', 'INVALID_TRANSITION', 'BPS_SUM_MISMATCH', 'SIGNATURES_INCOMPLETE', 'INVITE_REQUIRES_DRAFT', 'SETTLEMENT_REQUIRES_LOCKED'].includes(code)) {
       return reply.status(409).send({ error: code, message: 'Operação recusada pelas regras de integridade da parceria.' });
@@ -240,6 +246,62 @@ export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS
   app.get('/api/deals/:id', async (req: any, reply) => { const s = await auth(req, reply); return ctx.db.tx((q) => deals.dealView(q, ctx, req.params.id, s.uid)); });
   app.get('/api/deals/:id/history', async (req: any, reply) => { const s = await auth(req, reply); return { events: await ctx.db.tx((q) => deals.dealHistory(q, req.params.id, s.uid)) }; });
   app.get('/api/deals/:id/compliance', async (req: any, reply) => { const s = await auth(req, reply); return ps.complianceView(ctx, s.uid, req.params.id); });
+
+  // ---------------------------------------------------------------- link de visualização da mesa
+  // Gerar, reexibir e revogar: exclusivo do admin (assertDealAdmin dentro do serviço).
+  app.get('/api/deals/:id/share-link', async (req: any, reply) => { const s = await auth(req, reply); return share.viewLink(ctx, s.uid, req.params.id); });
+  app.post('/api/deals/:id/share-link', async (req: any, reply) => { const s = await auth(req, reply); return share.createViewLink(ctx, s.uid, req.params.id); });
+  app.post('/api/deals/:id/share-link/regenerate', async (req: any, reply) => { const s = await auth(req, reply); return share.regenerateViewLink(ctx, s.uid, req.params.id); });
+  app.get('/api/deals/:id/viewers', async (req: any, reply) => { const s = await auth(req, reply); return share.listViewers(ctx, s.uid, req.params.id); });
+
+  // Leitura por link. SOMENTE GET: nenhuma rota de escrita aceita token, então quem abre o link
+  // não tem caminho para assinar, convidar ou alterar. O portão e o cadastro ficam antes de tudo.
+  const sharedSchema = { params: obj({ token: S.token }) };
+  app.get('/api/shared/:token/gate', { schema: sharedSchema }, async (req: any, reply) => {
+    const s = await auth(req, reply);
+    return share.viewerGate(ctx, s.uid, s.addr, req.params.token);
+  });
+  app.post('/api/shared/:token/register', { schema: { ...sharedSchema, body: obj({ fullName: { type: 'string', maxLength: 120 }, email: { type: 'string', maxLength: 254 }, phone: { type: 'string', maxLength: 24 }, country: { type: 'string', pattern: '^[A-Z]{2}$' } }) } },
+    async (req: any, reply) => {
+      const s = await auth(req, reply);
+      return share.registerViewer(ctx, s.uid, s.addr, req.params.token, req.body);
+    });
+  /** Resolve token + identificação e devolve o olhar certo: membro vê como membro, visitante vê só leitura. */
+  const sharedAccess = async (req: any, reply: FastifyReply) => {
+    const s = await auth(req, reply);
+    return ctx.db.tx(async (q) => {
+      const { id: dealId } = await share.dealByToken(q, req.params.token);
+      return { dealId, userId: await share.assertViewer(q, dealId, s.uid) };
+    });
+  };
+  app.get('/api/shared/:token', { schema: sharedSchema }, async (req: any, reply) => {
+    const { dealId, userId } = await sharedAccess(req, reply);
+    return ctx.db.tx((q) => deals.dealView(q, ctx, dealId, userId, req.params.token));
+  });
+  app.get('/api/shared/:token/history', { schema: sharedSchema }, async (req: any, reply) => {
+    const { dealId, userId } = await sharedAccess(req, reply);
+    return { events: await ctx.db.tx((q) => deals.dealHistory(q, dealId, userId)) };
+  });
+  app.get('/api/shared/:token/compliance', { schema: sharedSchema }, async (req: any, reply) => {
+    const { dealId, userId } = await sharedAccess(req, reply);
+    return ps.complianceView(ctx, userId, dealId);
+  });
+  app.get('/api/shared/:token/documents', { schema: sharedSchema }, async (req: any, reply) => {
+    const { dealId, userId } = await sharedAccess(req, reply);
+    return { documents: await ps.listDocuments(ctx, userId, dealId) };
+  });
+  app.get('/api/shared/:token/settlement/preview', { schema: sharedSchema }, async (req: any, reply) => {
+    const { dealId, userId } = await sharedAccess(req, reply);
+    return ps.settlementPreview(ctx, userId, dealId);
+  });
+  // Baixar o documento faz parte de "ver a operação": sem isto o botão BAIXAR existiria e falharia.
+  app.get('/api/shared/:token/documents/:vid/content', { schema: { params: obj({ token: S.token, vid: S.uuid }) } }, async (req: any, reply) => {
+    const { dealId, userId } = await sharedAccess(req, reply);
+    const d = await ps.documentContent(ctx, userId, dealId, req.params.vid);
+    reply.header('Content-Disposition', `attachment; filename="${d.filename}"`);
+    reply.type('application/octet-stream');
+    return d.content;
+  });
 
   const lineSchema = obj({
     lineKey: { type: 'string', pattern: '^[a-z0-9_]{1,40}$' }, label: { type: 'string', minLength: 1, maxLength: 60 },

@@ -49,13 +49,22 @@ export async function assertDealAdmin(q: Queryable, dealId: string, userId: stri
   if (rows[0].admin_user_id !== userId) throw forbidden('Ação exclusiva do admin da operação.');
 }
 
-/** Autorização por operação: admin ou participante com convite concluído. */
-export async function assertDealMember(q: Queryable, dealId: string, userId: string): Promise<{ isAdmin: boolean }> {
+/**
+ * Autorização por operação: admin ou participante com convite concluído.
+ *
+ * userId `null` significa acesso JÁ AUTORIZADO como visualizador do link da mesa: quem abriu o
+ * link provou a carteira na sessão e se identificou, e isso foi conferido em services/sharing.ts.
+ * Não há pertencimento a checar, e sem usuário não existe "eu" na mesa — some o isAdmin, some o
+ * `me` e somem os contatos. Só chega aqui pelas rotas GET de /api/shared/:token; nenhuma rota de
+ * escrita aceita token, então visualizador não tem como agir.
+ */
+export async function assertDealMember(q: Queryable, dealId: string, userId: string | null): Promise<{ isAdmin: boolean }> {
   if (!/^[0-9a-f-]{36}$/.test(String(dealId))) throw notFound('Operação não encontrada.');
   const { rows } = await q.query<any>(
     `SELECT d.admin_user_id, EXISTS (SELECT 1 FROM deal_participants dp WHERE dp.deal_id = d.id AND dp.user_id = $2) AS member
        FROM deals d WHERE d.id = $1`, [dealId, userId]);
   if (!rows[0]) throw notFound('Operação não encontrada.');
+  if (userId === null) return { isAdmin: false };
   const isAdmin = rows[0].admin_user_id === userId;
   if (!isAdmin && !rows[0].member) throw notFound('Operação não encontrada.');
   return { isAdmin };
@@ -77,7 +86,8 @@ function participantSort(a: any, b: any): number {
   return oa !== ob ? oa - ob : a.seq - b.seq;
 }
 
-export async function dealView(q: Queryable, ctx: Ctx, dealId: string, viewerId: string) {
+/** viewerId null + sharedToken = mesa aberta por link de visualização: mesma view, só leitura. */
+export async function dealView(q: Queryable, ctx: Ctx, dealId: string, viewerId: string | null, sharedToken: string | null = null) {
   const { isAdmin } = await assertDealMember(q, dealId, viewerId);
   const { rows: [d] } = await q.query<any>(
     `SELECT d.id, d.code, d.is_demo, d.admin_user_id, d.created_at, o.id AS offer_id, o.kind, o.title, o.volume_text, o.reference_amount,
@@ -111,13 +121,16 @@ export async function dealView(q: Queryable, ctx: Ctx, dealId: string, viewerId:
   const receive = legViews.find((l) => l.side === 'RECEBIMENTO');
   const offPlatform = legViews.some((l) => !l.onchain);
   const now = ctx.cfg.now();
-  const me = people.find((p) => p.user_id === viewerId);
+  // Sem viewerId (link de visualização) não existe "eu": sem o guarda, as cadeiras VAZIAS
+  // (user_id null) casariam com viewerId null e a mesa diria que o visualizador é participante.
+  const me = viewerId === null ? undefined : people.find((p) => p.user_id === viewerId);
   const { rows: [st] } = await q.query<any>(`SELECT * FROM settlements WHERE version_id = $1`, [v.id]);
   const { rows: [vc] } = await q.query<any>(`SELECT COUNT(*)::int AS n FROM partnership_versions WHERE partnership_id = $1`, [v.partnership_id]);
   // Só existe escrow quando houver contrato real implantado e a versão estiver FUNDED/EXECUTING.
   const escrowActive = ['FUNDED', 'EXECUTING'].includes(v.status) && ESCROW_CONTRACT_ADDRESS !== null;
   return {
     id: d.id, code: d.code, isDemo: d.is_demo, isAdmin, createdAt: d.created_at,
+    readOnly: viewerId === null, sharedToken,
     offer: {
       id: d.offer_id, kind: d.kind, kindLabel: d.kind === 'UNICA' ? 'OFERTA ÚNICA' : 'PARCERIA PERMANENTE',
       title: d.title, businessId: d.business_id, businessName: d.business_name, tagline: d.tagline, volume: d.volume_text,
@@ -142,12 +155,15 @@ export async function dealView(q: Queryable, ctx: Ctx, dealId: string, viewerId:
     participants: people.map((p) => {
       const pmIndex = p.role_key === 'PAY_MASTER' ? p.seq : null;
       const bps = roleBps.get(`${p.role_key}#${p.seq}`) ?? 0;
-      const visible = !!p.user_id && p.completed;
+      // Contato só para quem está dentro da mesa. É a promessa feita ao parceiro no cadastro:
+      // "seus contatos só ficam visíveis para participantes desta operação com convite concluído".
+      // Quem abre o link de visualização não é participante — vê a operação, não as pessoas.
+      const visible = viewerId !== null && !!p.user_id && p.completed;
       return {
         id: p.id, roleKey: p.role_key, seq: p.seq, role: roleLabel(p.role_key, p.seq),
         isPayMaster: p.role_key === 'PAY_MASTER',
         payMasterBadge: p.role_key === 'PAY_MASTER' ? (pmCount > 1 ? `PAY MASTER ${String(pmIndex).padStart(2, '0')}` : 'PAY MASTER') : null,
-        filled: !!p.user_id, isMe: p.user_id === viewerId,
+        filled: !!p.user_id, isMe: viewerId !== null && p.user_id === viewerId,
         name: p.full_name ?? null,
         email: visible ? p.email : null, phone: visible ? p.phone : null, contactVisible: visible,
         wallet: p.address ?? null, walletShort: abbreviateAddress(p.address),
@@ -216,7 +232,7 @@ export async function dashboard(q: Queryable, ctx: Ctx, userId: string) {
   };
 }
 
-export async function dealHistory(q: Queryable, dealId: string, userId: string) {
+export async function dealHistory(q: Queryable, dealId: string, userId: string | null) {
   await assertDealMember(q, dealId, userId);
   const { rows } = await q.query<any>(
     `SELECT a.id, a.at, a.action, a.entity, a.entity_id, a.old_value, a.new_value, a.wallet, a.user_id, u.full_name

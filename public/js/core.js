@@ -246,4 +246,6 @@ export const ACTION_PT = {
   INVITE_EXPIRED: 'Convite expirado', WALLET_CHALLENGE_SIGNED: 'Prova de posse assinada', SIGNUP_COMPLETED: 'Cadastro concluído',
   INVITE_COMPLETED: 'Convite concluído', VERSION_SUBMITTED: 'Enviada para assinatura', VERSION_REOPENED: 'Voltou para rascunho',
   VERSION_CREATED: 'Nova versão criada', SIGNATURES_INVALIDATED: 'Assinaturas invalidadas', LOGIN: 'Login', DELETION_REQUESTED: 'Pedido de exclusão (LGPD)',
+  VIEW_LINK_CREATED: 'Link de visualização gerado', VIEW_LINK_REVOKED: 'Link de visualização trocado (o anterior parou de valer)',
+  VIEW_LINK_ACCESSED: 'Alguém se identificou pelo link de visualização',
 };

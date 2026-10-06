@@ -3497,6 +3497,8 @@ const ACTION_PT = {
   INVITE_EXPIRED: 'Convite expirado', WALLET_CHALLENGE_SIGNED: 'Prova de posse assinada', SIGNUP_COMPLETED: 'Cadastro concluído',
   INVITE_COMPLETED: 'Convite concluído', VERSION_SUBMITTED: 'Enviada para assinatura', VERSION_REOPENED: 'Voltou para rascunho',
   VERSION_CREATED: 'Nova versão criada', SIGNATURES_INVALIDATED: 'Assinaturas invalidadas', LOGIN: 'Login', DELETION_REQUESTED: 'Pedido de exclusão (LGPD)',
+  VIEW_LINK_CREATED: 'Link de visualização gerado', VIEW_LINK_REVOKED: 'Link de visualização trocado (o anterior parou de valer)',
+  VIEW_LINK_ACCESSED: 'Alguém se identificou pelo link de visualização',
 };
 
 // ===== components.js =====
@@ -4415,7 +4417,9 @@ async function tabDocumentos(d) {
       h('div', { class: 'hash', style: 'margin-top:4px' }, `SHA-256 ${doc.sha256}`),
       h('div', { class: 'small muted' }, `${fmtDate(doc.createdAt)} · ${Math.ceil(doc.size / 1024)} KB · aceito por: ${doc.acceptedBy.length ? doc.acceptedBy.map((a) => a.name).join(', ') : 'ninguém ainda'}`),
       h('div', { class: 'btn-row', style: 'margin-top:8px' },
-        h('a', { class: 'btn btn-ghost btn-sm', href: doc.downloadUrl, download: doc.name }, 'BAIXAR'),
+        // downloadUrl só existe na pré-visualização (data: URI, sem servidor). No servidor real o
+        // conteúdo vem por rota, e dealBase mantém o link certo também para quem abriu por link.
+        h('a', { class: 'btn btn-ghost btn-sm', href: doc.downloadUrl || `${dealBase(d)}/documents/${doc.versionId}/content` }, 'BAIXAR'),
         !d.readOnly && doc.isLatest && doc.requiresAcceptance && !doc.iAccepted ? h('button', {
           class: 'btn btn-primary btn-sm', onclick: async () => {
             try { await signFlow(`/api/deals/${d.id}/documents/${doc.versionId}/challenge`, `/api/deals/${d.id}/documents/${doc.versionId}/accept`, { title: 'Aceitar documento', action: 'ACEITAR' }); toast('Aceite registrado.'); reload(); }

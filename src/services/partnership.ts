@@ -426,7 +426,7 @@ async function settlementPlan(q: Queryable, ctx: Ctx, dealId: string, v: any) {
   return { asset, plan: { versionId: v.id, referenceAmount: BigInt(o.reference_amount), lines: await loadLines(q, v.id), gradeTotalBps: v.grade_total_bps, residualPolicy: v.residual_policy as ResidualPolicy } };
 }
 
-export async function settlementPreview(ctx: Ctx, userId: string, dealId: string) {
+export async function settlementPreview(ctx: Ctx, userId: string | null, dealId: string) {
   return ctx.db.tx(async (q) => {
     await assertDealMember(q, dealId, userId);
     const v = await currentVersion(q, dealId);
@@ -544,7 +544,7 @@ export async function addDocument(ctx: Ctx, adminId: string, dealId: string, inp
   });
 }
 
-export async function listDocuments(ctx: Ctx, userId: string, dealId: string) {
+export async function listDocuments(ctx: Ctx, userId: string | null, dealId: string) {
   return ctx.db.tx(async (q) => {
     await assertDealMember(q, dealId, userId);
     const { rows } = await q.query<any>(
@@ -563,7 +563,7 @@ export async function listDocuments(ctx: Ctx, userId: string, dealId: string) {
   });
 }
 
-export async function documentContent(ctx: Ctx, userId: string, dealId: string, versionId: string) {
+export async function documentContent(ctx: Ctx, userId: string | null, dealId: string, versionId: string) {
   return ctx.db.tx(async (q) => {
     await assertDealMember(q, dealId, userId);
     const { rows: [r] } = await q.query<any>(
@@ -611,7 +611,7 @@ export async function acceptDocument(ctx: Ctx, userId: string, dealId: string, v
 }
 
 // ================================================================= compliance (somente status informativos)
-export async function complianceView(ctx: Ctx, userId: string, dealId: string) {
+export async function complianceView(ctx: Ctx, userId: string | null, dealId: string) {
   return ctx.db.tx(async (q) => {
     await assertDealMember(q, dealId, userId);
     const v = await currentVersion(q, dealId);

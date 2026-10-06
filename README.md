@@ -12,7 +12,7 @@ Requisitos: Node.js 22.18+ (executa TypeScript nativamente; não há etapa de bu
 npm install
 cp .env.example .env        # ajuste COOKIE_SECURE=false para http://localhost
 npm start                   # http://localhost:8787
-npm test                    # 41 testes (motor de comissões, onboarding 3.9, parceria/banco/settlement)
+npm test                    # 48 testes (motor de comissões, onboarding 3.9, parceria/banco/settlement)
 npm run db:reset            # apaga o banco local; o próximo "npm start" recria o DEMO
 ```
 
@@ -51,11 +51,11 @@ src/
   lib/bps.ts       motor de grade/comissões: bps inteiros, BigInt, resíduo explícito, nunca float
   lib/crypto.ts    token 256 bits, código VOTC, HMAC/tempo constante, base58, Ed25519, JSON canônico
   adapters/        SignatureAdapter, AssetAdapter (registry), QrPayloadAdapter (Solana Pay), SettlementAdapter (DEMO), BlockchainAdapter
-  services/        auth (challenge/nonce/sessão), invitations (uso único), deals (views com privacidade), partnership (ofertas, linhas, versões, assinaturas, settlement, documentos)
+  services/        auth (challenge/nonce/sessão), invitations (uso único), sharing (link de visualização só-leitura), deals (views com privacidade), partnership (ofertas, linhas, versões, assinaturas, settlement, documentos)
   demo.ts          personas e mesas DEMO (chaves derivadas de sementes PÚBLICAS)
-migrations/        001_schema.sql (20 entidades) · 002_guards.sql (triggers de integridade)
+migrations/        001_schema.sql (20 entidades) · 002_guards.sql (triggers de integridade) · 003_view_link.sql (link de visualização da mesa)
 docs/              ARQUITETURA, ADR-001, SEGURANCA (checklist), DEVNET
-test/              41 testes (node --test)
+test/              48 testes (node --test)
 ```
 
 Separação OFF-CHAIN × ON-CHAIN: cadastro, convite, documentos, Deal Room, workflow e auditoria são off-chain. Carteira, assinatura, regras econômicas, escrow, settlement e distribuição ficam atrás de adapters; nesta entrega o único adapter de settlement é o **DEMO_SIMULATED** (nada se move, nenhum selo de proteção é exibido).
@@ -70,6 +70,8 @@ Onboarding: `GET /i/:token` (não consome) · `POST /invite/open` (consome) · `
 Admin: `POST /invitations` · `GET /invitations?dealId` · `POST /invitations/:id/revoke` · `POST /invitations/:id/regenerate`.
 Login sem senha: `POST /auth/wallet-challenge` · `POST /auth/wallet-verify` · `POST /auth/logout`.
 Área autenticada (`/api/...`): `me`, `me/deletion-request`, `config`, `assets`, `dashboard`, `deals`, `businesses`, `deals/:id` (view), `/history`, `/compliance`, `/qr/:pid`, `PUT /lines`, `/slots`, `/submit`, `/reopen`, `/new-version`, `/agreement/{challenge,sign}`, `/settlement/{preview,challenge,fund,execute}`, `/documents[...]`, `audit`.
+Link de visualização da mesa — admin: `GET/POST /api/deals/:id/share-link` · `POST /api/deals/:id/share-link/regenerate` · `GET /api/deals/:id/viewers`.
+Link de visualização — quem abre: `GET /api/shared/:token/gate` · `POST /api/shared/:token/register` · e as leituras `GET /api/shared/:token[/history|/compliance|/documents|/documents/:vid/content|/settlement/preview]`.
 
 Todo input é validado por JSON Schema com `additionalProperties:false`; autorização é por operação (admin ou participante com convite concluído); respostas de convite inválido são sempre a mesma mensagem.
 
@@ -80,6 +82,7 @@ Todo input é validado por JSON Schema com `additionalProperties:false`; autoriz
 - **Mainnet**: recusada. Só depois de testes, revisão de segurança, auditoria independente e autorização explícita.
 - **Postgres de servidor**: incluído (`node-postgres`, ligado por `DATABASE_URL`) e exercitado pelo protocolo real do Postgres — migrations, transações com rollback, seed DEMO e o fluxo inteiro do convite. O que **não** foi exercitado é um provedor específico: TLS com CA do provedor, comportamento do pooler sob carga e limites de conexão só se confirmam no ambiente de verdade.
 - **Rate limit em serverless**: na Vercel ele conta por instância, não global (ver `api/index.ts`). O bloqueio do convite em 5 erros de código é que vive no banco e vale globalmente.
+- **Link de visualização**: é segredo de URL — quem recebe o link pode repassá-lo, e a mesa não tem como saber. O que limita o estrago: o token fica guardado em claro só para o admin poder reexibi-lo, regenerar invalida o anterior na hora, quem abre precisa **já ter cadastro** (não há cadastro público, nem pelo link) e se identificar antes de ver qualquer coisa, e só existem rotas GET sob `/api/shared/:token` — visualizador não assina, não convida e não altera. Contatos dos participantes não aparecem para quem entra por link.
 
 ## Comandos
 

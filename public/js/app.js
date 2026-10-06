@@ -602,7 +602,9 @@ async function tabDocumentos(d) {
       h('div', { class: 'hash', style: 'margin-top:4px' }, `SHA-256 ${doc.sha256}`),
       h('div', { class: 'small muted' }, `${fmtDate(doc.createdAt)} · ${Math.ceil(doc.size / 1024)} KB · aceito por: ${doc.acceptedBy.length ? doc.acceptedBy.map((a) => a.name).join(', ') : 'ninguém ainda'}`),
       h('div', { class: 'btn-row', style: 'margin-top:8px' },
-        h('a', { class: 'btn btn-ghost btn-sm', href: `/api/deals/${d.id}/documents/${doc.versionId}/content` }, 'BAIXAR'),
+        // downloadUrl só existe na pré-visualização (data: URI, sem servidor). No servidor real o
+        // conteúdo vem por rota, e dealBase mantém o link certo também para quem abriu por link.
+        h('a', { class: 'btn btn-ghost btn-sm', href: doc.downloadUrl || `${dealBase(d)}/documents/${doc.versionId}/content` }, 'BAIXAR'),
         !d.readOnly && doc.isLatest && doc.requiresAcceptance && !doc.iAccepted ? h('button', {
           class: 'btn btn-primary btn-sm', onclick: async () => {
             try { await signFlow(`/api/deals/${d.id}/documents/${doc.versionId}/challenge`, `/api/deals/${d.id}/documents/${doc.versionId}/accept`, { title: 'Aceitar documento', action: 'ACEITAR' }); toast('Aceite registrado.'); reload(); }
