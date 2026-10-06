@@ -17,6 +17,12 @@
   const newCode = () => 'VOTC-' + Array.from(nacl.randomBytes(6), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
   const normCode = (c) => { const s = String(c || '').toUpperCase().replace(/[\s-]/g, ''); const body = s.startsWith('VOTC') ? s.slice(4) : s; if (body.length !== 6 || [...body].some((x) => !CODE_ALPHABET.includes(x))) return null; return 'VOTC-' + body; };
   const GENERIC = 'Este convite não é mais válido. Peça um novo link.';
+  // Nesta prévia não existe servidor: o "banco" é o localStorage de CADA navegador. Então um
+  // link criado aqui não abre em outro aparelho — não é link vencido, é estado que não viajou.
+  const SEM_SERVIDOR = 'A pré-visualização não tem servidor: cada navegador guarda a própria mesa no próprio aparelho. '
+    + 'Por isso links criados aqui não abrem em outro navegador ou celular. Para enviar links a outras pessoas, é preciso o app completo rodando num servidor.';
+  const OUTRO_NAVEGADOR = `Este link foi criado em outro navegador. ${SEM_SERVIDOR}`;
+  const JA_ABERTO = 'Este convite já foi aberto neste aparelho, e ele vale uma única vez. Peça um novo link ao responsável pela mesa.';
   const ORIGIN = location.origin + location.pathname;
 
   // ------------------------------------------------------------------ números
@@ -126,7 +132,8 @@
   };
   const sharedDeal = (t) => {
     const d = /^[A-Za-z0-9_-]{43}$/.test(t || '') ? S.deals.find((x) => x.viewToken === t) : null;
-    if (!d) throw err(404, 'LINK_INVALID', 'Este link de visualização não é mais válido. Peça um novo ao Pay Master 01.');
+    // Mesmo caso do convite: na prévia o link não atravessa navegadores.
+    if (!d) throw err(404, 'LINK_INVALID', `Este link de visualização não existe neste navegador. ${SEM_SERVIDOR}`);
     return d;
   };
   // Quem abre o link precisa se identificar antes de ver a operação (padrão NCNDA).
@@ -323,7 +330,11 @@
   const findInv = (token) => { if (!/^[A-Za-z0-9_-]{43}$/.test(token || '')) return null; const h = sha(token); for (const d of S.deals) for (const i of d.invitations) if (i.tokenHash === h) return { d, i }; return null; };
   function openInv(token) {
     sweep(); const f = findInv(token);
-    if (!f || f.i.status !== 'ATIVO') throw err(404, 'INVITE_INVALID', GENERIC);
+    // O servidor real responde sempre GENERIC, de propósito, para não revelar se um token
+    // existe. Aqui não há esse risco — é um mock local, sem segredo — e o motivo real
+    // importa: o mais comum na prévia é o link ter sido criado em OUTRO navegador.
+    if (!f) throw err(404, 'INVITE_INVALID', OUTRO_NAVEGADOR);
+    if (f.i.status !== 'ATIVO') throw err(404, 'INVITE_INVALID', ['ABERTO', 'CONCLUIDO'].includes(f.i.status) ? JA_ABERTO : GENERIC);
     const sess = rnd(16); f.i.status = 'ABERTO'; f.i.openedAt = nowIso(); f.i.session = sha(sess); S.inviteSessions[f.i.id] = sess;
     audit(f.d, 'INVITE_OPENED', null, { entity: 'invitation' }); save();
     return { step: 'CHOICE', walletDownloadUrl: null };

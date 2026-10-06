@@ -10,7 +10,10 @@ export function startInvite(root, token) {
   const steps = ['CHOICE', 'CODE', 'WALLET', 'SIGNUP', 'TERMS'];
   const progress = () => h('div', { class: 'steps', 'aria-hidden': 'true' }, steps.map((s, i) => h('i', { class: steps.indexOf(st.step) >= i ? 'on' : '' })));
   const fail = (e) => {
-    if (e.code === 'INVITE_INVALID' || e.status === 404) { st.step = 'INVALID'; draw(); return; }
+    // Mostra o motivo que o servidor deu, em vez de um texto fixo: no servidor real ele é
+    // sempre o GENERIC (de propósito, para não revelar se um token existe), mas a
+    // pré-visualização sabe distinguir "aberto em outro navegador" de "já usado".
+    if (e.code === 'INVITE_INVALID' || e.status === 404) { st.step = 'INVALID'; st.invalidReason = e.message || GENERIC; draw(); return; }
     st.error = e.message; draw();
   };
   const summaryBox = () => st.summary ? h('div', { class: 'panel', style: 'margin-bottom:16px' },
@@ -34,7 +37,7 @@ export function startInvite(root, token) {
         h('p', { class: 'lead' }, 'Toque para abrir. Atenção: o convite só abre uma vez, neste aparelho.'),
         h('button', { class: 'btn btn-primary btn-block', disabled: st.busy, onclick: open }, 'ABRIR CONVITE'), err);
     } else if (st.step === 'INVALID') {
-      add(wrap, h('h1', {}, 'Convite indisponível'), h('p', { class: 'lead' }, GENERIC));
+      add(wrap, h('h1', {}, 'Convite indisponível'), h('p', { class: 'lead' }, st.invalidReason || GENERIC));
     } else if (st.step === 'CHOICE') {
       const ad = getAdapter();
       const cs = choiceState({ walletAvailable: ad.isAvailable(), downloadUrl: state.config?.walletDownloadUrl });

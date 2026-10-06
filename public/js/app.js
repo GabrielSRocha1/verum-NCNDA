@@ -305,6 +305,9 @@ function openShareSheet(d) {
     const draw = (r) => s.render(
       h('h2', {}, 'Link de visualização'),
       h('p', { class: 'muted small' }, `Mesa ${d.code}. Quem abrir este link vê a operação inteira, só leitura, e precisa entrar com a Verum Wallet. Só você, como Pay Master 01, pode gerar e regerar o link.`),
+      // Na prévia não há servidor: avisa antes de a pessoa enviar o link e ele falhar do outro lado.
+      state.config?.preview ? h('p', { class: 'notice notice-risk', style: 'margin:10px 0' },
+        'PRÉVIA: este link só abre NESTE navegador. Não há servidor aqui — cada aparelho guarda a própria mesa. Enviar para outra pessoa não vai funcionar.') : null,
       r.url
         ? h('div', {},
           h('label', { class: 'field' }, h('span', {}, 'Link da mesa'), h('div', { class: 'sigmsg' }, r.url)),

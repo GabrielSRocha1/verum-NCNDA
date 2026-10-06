@@ -133,6 +133,9 @@ export function inviteResultNodes(r, s) {
   return [
       h('h2', {}, 'Convite gerado'),
       h('p', { class: 'notice notice-risk', style: 'margin:10px 0' }, 'Link e código aparecem só agora. Copie antes de fechar.'),
+      // Na prévia não há servidor: avisa antes de a pessoa enviar o link e ele falhar do outro lado.
+      state.config?.preview ? h('p', { class: 'notice notice-risk', style: 'margin:10px 0' },
+        'PRÉVIA: este link só abre NESTE navegador. Não há servidor aqui — cada aparelho guarda a própria mesa. Enviar para outra pessoa não vai funcionar.') : null,
       h('label', { class: 'field' }, h('span', {}, 'Link (uso único)'), h('div', { class: 'sigmsg' }, r.link)),
       h('label', { class: 'field' }, h('span', {}, 'Código'), h('div', { class: 'mono', style: 'font-size:26px;font-weight:700;letter-spacing:.08em' }, r.code)),
       h('div', { class: 'btn-row' },

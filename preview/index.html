@@ -2600,6 +2600,12 @@ var qrcode = function() {
   const newCode = () => 'VOTC-' + Array.from(nacl.randomBytes(6), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
   const normCode = (c) => { const s = String(c || '').toUpperCase().replace(/[\s-]/g, ''); const body = s.startsWith('VOTC') ? s.slice(4) : s; if (body.length !== 6 || [...body].some((x) => !CODE_ALPHABET.includes(x))) return null; return 'VOTC-' + body; };
   const GENERIC = 'Este convite não é mais válido. Peça um novo link.';
+  // Nesta prévia não existe servidor: o "banco" é o localStorage de CADA navegador. Então um
+  // link criado aqui não abre em outro aparelho — não é link vencido, é estado que não viajou.
+  const SEM_SERVIDOR = 'A pré-visualização não tem servidor: cada navegador guarda a própria mesa no próprio aparelho. '
+    + 'Por isso links criados aqui não abrem em outro navegador ou celular. Para enviar links a outras pessoas, é preciso o app completo rodando num servidor.';
+  const OUTRO_NAVEGADOR = `Este link foi criado em outro navegador. ${SEM_SERVIDOR}`;
+  const JA_ABERTO = 'Este convite já foi aberto neste aparelho, e ele vale uma única vez. Peça um novo link ao responsável pela mesa.';
   const ORIGIN = location.origin + location.pathname;
 
   // ------------------------------------------------------------------ números
@@ -2709,7 +2715,8 @@ var qrcode = function() {
   };
   const sharedDeal = (t) => {
     const d = /^[A-Za-z0-9_-]{43}$/.test(t || '') ? S.deals.find((x) => x.viewToken === t) : null;
-    if (!d) throw err(404, 'LINK_INVALID', 'Este link de visualização não é mais válido. Peça um novo ao Pay Master 01.');
+    // Mesmo caso do convite: na prévia o link não atravessa navegadores.
+    if (!d) throw err(404, 'LINK_INVALID', `Este link de visualização não existe neste navegador. ${SEM_SERVIDOR}`);
     return d;
   };
   // Quem abre o link precisa se identificar antes de ver a operação (padrão NCNDA).
@@ -2906,7 +2913,11 @@ var qrcode = function() {
   const findInv = (token) => { if (!/^[A-Za-z0-9_-]{43}$/.test(token || '')) return null; const h = sha(token); for (const d of S.deals) for (const i of d.invitations) if (i.tokenHash === h) return { d, i }; return null; };
   function openInv(token) {
     sweep(); const f = findInv(token);
-    if (!f || f.i.status !== 'ATIVO') throw err(404, 'INVITE_INVALID', GENERIC);
+    // O servidor real responde sempre GENERIC, de propósito, para não revelar se um token
+    // existe. Aqui não há esse risco — é um mock local, sem segredo — e o motivo real
+    // importa: o mais comum na prévia é o link ter sido criado em OUTRO navegador.
+    if (!f) throw err(404, 'INVITE_INVALID', OUTRO_NAVEGADOR);
+    if (f.i.status !== 'ATIVO') throw err(404, 'INVITE_INVALID', ['ABERTO', 'CONCLUIDO'].includes(f.i.status) ? JA_ABERTO : GENERIC);
     const sess = rnd(16); f.i.status = 'ABERTO'; f.i.openedAt = nowIso(); f.i.session = sha(sess); S.inviteSessions[f.i.id] = sess;
     audit(f.d, 'INVITE_OPENED', null, { entity: 'invitation' }); save();
     return { step: 'CHOICE', walletDownloadUrl: null };
@@ -3612,6 +3623,9 @@ function inviteResultNodes(r, s) {
   return [
       h('h2', {}, 'Convite gerado'),
       h('p', { class: 'notice notice-risk', style: 'margin:10px 0' }, 'Link e código aparecem só agora. Copie antes de fechar.'),
+      // Na prévia não há servidor: avisa antes de a pessoa enviar o link e ele falhar do outro lado.
+      state.config?.preview ? h('p', { class: 'notice notice-risk', style: 'margin:10px 0' },
+        'PRÉVIA: este link só abre NESTE navegador. Não há servidor aqui — cada aparelho guarda a própria mesa. Enviar para outra pessoa não vai funcionar.') : null,
       h('label', { class: 'field' }, h('span', {}, 'Link (uso único)'), h('div', { class: 'sigmsg' }, r.link)),
       h('label', { class: 'field' }, h('span', {}, 'Código'), h('div', { class: 'mono', style: 'font-size:26px;font-weight:700;letter-spacing:.08em' }, r.code)),
       h('div', { class: 'btn-row' },
@@ -3645,7 +3659,10 @@ function startInvite(root, token) {
   const steps = ['CHOICE', 'CODE', 'WALLET', 'SIGNUP', 'TERMS'];
   const progress = () => h('div', { class: 'steps', 'aria-hidden': 'true' }, steps.map((s, i) => h('i', { class: steps.indexOf(st.step) >= i ? 'on' : '' })));
   const fail = (e) => {
-    if (e.code === 'INVITE_INVALID' || e.status === 404) { st.step = 'INVALID'; draw(); return; }
+    // Mostra o motivo que o servidor deu, em vez de um texto fixo: no servidor real ele é
+    // sempre o GENERIC (de propósito, para não revelar se um token existe), mas a
+    // pré-visualização sabe distinguir "aberto em outro navegador" de "já usado".
+    if (e.code === 'INVITE_INVALID' || e.status === 404) { st.step = 'INVALID'; st.invalidReason = e.message || GENERIC; draw(); return; }
     st.error = e.message; draw();
   };
   const summaryBox = () => st.summary ? h('div', { class: 'panel', style: 'margin-bottom:16px' },
@@ -3669,7 +3686,7 @@ function startInvite(root, token) {
         h('p', { class: 'lead' }, 'Toque para abrir. Atenção: o convite só abre uma vez, neste aparelho.'),
         h('button', { class: 'btn btn-primary btn-block', disabled: st.busy, onclick: open }, 'ABRIR CONVITE'), err);
     } else if (st.step === 'INVALID') {
-      add(wrap, h('h1', {}, 'Convite indisponível'), h('p', { class: 'lead' }, GENERIC));
+      add(wrap, h('h1', {}, 'Convite indisponível'), h('p', { class: 'lead' }, st.invalidReason || GENERIC));
     } else if (st.step === 'CHOICE') {
       const ad = getAdapter();
       const cs = choiceState({ walletAvailable: ad.isAvailable(), downloadUrl: state.config?.walletDownloadUrl });
@@ -4080,6 +4097,9 @@ function openShareSheet(d) {
     const draw = (r) => s.render(
       h('h2', {}, 'Link de visualização'),
       h('p', { class: 'muted small' }, `Mesa ${d.code}. Quem abrir este link vê a operação inteira, só leitura, e precisa entrar com a Verum Wallet. Só você, como Pay Master 01, pode gerar e regerar o link.`),
+      // Na prévia não há servidor: avisa antes de a pessoa enviar o link e ele falhar do outro lado.
+      state.config?.preview ? h('p', { class: 'notice notice-risk', style: 'margin:10px 0' },
+        'PRÉVIA: este link só abre NESTE navegador. Não há servidor aqui — cada aparelho guarda a própria mesa. Enviar para outra pessoa não vai funcionar.') : null,
       r.url
         ? h('div', {},
           h('label', { class: 'field' }, h('span', {}, 'Link da mesa'), h('div', { class: 'sigmsg' }, r.url)),
