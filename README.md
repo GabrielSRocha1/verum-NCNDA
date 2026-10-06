@@ -12,7 +12,7 @@ Requisitos: Node.js 22.18+ (executa TypeScript nativamente; não há etapa de bu
 npm install
 cp .env.example .env        # ajuste COOKIE_SECURE=false para http://localhost
 npm start                   # http://localhost:8787
-npm test                    # 40 testes (motor de comissões, onboarding 3.9, parceria/banco/settlement)
+npm test                    # 41 testes (motor de comissões, onboarding 3.9, parceria/banco/settlement)
 npm run db:reset            # apaga o banco local; o próximo "npm start" recria o DEMO
 ```
 
@@ -47,7 +47,7 @@ public/            PWA (mobile-first 360px, desktop com sidebar). Sem CDN: tweet
 src/
   app.ts           Fastify: rotas, schemas (additionalProperties:false, sem removeAdditional), headers de segurança, rate limit
   config.ts        .env → configuração; recusa mainnet; exige segredos fora do DEMO
-  db.ts            PGlite + migrations (SQL Postgres padrão — roda igual num Postgres de servidor)
+  db.ts            dois bancos atrás da mesma interface: Postgres de servidor (DATABASE_URL, via node-postgres) ou PGlite embarcado; migrations em SQL padrão
   lib/bps.ts       motor de grade/comissões: bps inteiros, BigInt, resíduo explícito, nunca float
   lib/crypto.ts    token 256 bits, código VOTC, HMAC/tempo constante, base58, Ed25519, JSON canônico
   adapters/        SignatureAdapter, AssetAdapter (registry), QrPayloadAdapter (Solana Pay), SettlementAdapter (DEMO), BlockchainAdapter
@@ -55,7 +55,7 @@ src/
   demo.ts          personas e mesas DEMO (chaves derivadas de sementes PÚBLICAS)
 migrations/        001_schema.sql (20 entidades) · 002_guards.sql (triggers de integridade)
 docs/              ARQUITETURA, ADR-001, SEGURANCA (checklist), DEVNET
-test/              40 testes (node --test)
+test/              41 testes (node --test)
 ```
 
 Separação OFF-CHAIN × ON-CHAIN: cadastro, convite, documentos, Deal Room, workflow e auditoria são off-chain. Carteira, assinatura, regras econômicas, escrow, settlement e distribuição ficam atrás de adapters; nesta entrega o único adapter de settlement é o **DEMO_SIMULATED** (nada se move, nenhum selo de proteção é exibido).
@@ -78,11 +78,12 @@ Todo input é validado por JSON Schema com `additionalProperties:false`; autoriz
 - **Verum Wallet**: não existe API pública de provider web documentada. O cliente aceita somente `id: 'verum-wallet'`; em DEMO há um provider simulado que assina Ed25519 de verdade. O servidor não consegue saber qual software gerou a assinatura; a UI **não** afirma "autocustódia verificada". Deep link "Abrir na Verum Wallet" fica oculto até existir um real.
 - **Solana Devnet / contrato**: não implementados nesta entrega (fases 13/14). `SOLANA_NETWORK=solana-devnet` é aceito pela configuração, mas o adapter de blockchain se declara indisponível. Veja `docs/DEVNET.md` e `docs/ADR-001-distribuicao-n-participantes.md`.
 - **Mainnet**: recusada. Só depois de testes, revisão de segurança, auditoria independente e autorização explícita.
-- **Postgres de servidor**: as migrations são SQL padrão (testadas no Postgres 18 do PGlite), mas um driver `pg` para servidor externo não foi incluído nem testado.
+- **Postgres de servidor**: incluído (`node-postgres`, ligado por `DATABASE_URL`) e exercitado pelo protocolo real do Postgres — migrations, transações com rollback, seed DEMO e o fluxo inteiro do convite. O que **não** foi exercitado é um provedor específico: TLS com CA do provedor, comportamento do pooler sob carga e limites de conexão só se confirmam no ambiente de verdade.
+- **Rate limit em serverless**: na Vercel ele conta por instância, não global (ver `api/index.ts`). O bloqueio do convite em 5 erros de código é que vive no banco e vale globalmente.
 
 ## Comandos
 
-`npm start` · `npm run dev` (watch) · `npm test` · `npm run typecheck` · `npm run db:reset` · `npm run vendor` (re-copia tweetnacl/qrcode para public/vendor) · `npm run preview` (regera a pré-visualização).
+`npm start` · `npm run dev` (watch) · `npm test` · `npm run typecheck` · `npm run db:reset` · `npm run db:setup` (prepara um banco compartilhado: migrations + seed DEMO) · `npm run vendor` (re-copia tweetnacl/qrcode para public/vendor) · `npm run preview` (regera a pré-visualização).
 
 ## Deploy — este projeto não é compilado
 
@@ -92,14 +93,73 @@ o arquivo. **Não existe passo de build que gere JS**, e não é possível criar
 todos os imports — `allowImportingTsExtensions` exige `noEmit`, e tirar as extensões quebraria
 `npm start`.
 
-### Onde este app roda — e onde não roda
+### A regra que decide tudo: o banco tem que ser compartilhado
 
-Ele precisa de **processo persistente e disco gravável**. Não roda em serverless
-(Vercel Functions, Lambda e afins) porque `src/server.ts` faz `app.listen()` e fica de pé,
-e `src/db.ts` cria `./data/pgdata` com o PGlite — filesystem só-leitura e processo efêmero
-quebram os dois.
+Um convite é um registro no banco (token e código guardados só como hash). Quem abre o link
+precisa cair no **mesmo banco** em que ele foi criado. Daí as duas formas de publicar:
 
-Use Render, Railway, Fly ou um VPS:
+| Banco | O que acontece com o link enviado |
+|---|---|
+| PGlite local (`DATA_DIR`) | só abre em quem tem aquele arquivo. Em disco efêmero, o banco some no próximo deploy |
+| `DATABASE_URL` (Postgres de servidor) | abre em qualquer navegador e aparelho — é o que faz o convite funcionar de fato |
+
+Sem `DATABASE_URL` o app usa PGlite e nada muda em relação ao desenvolvimento local. Com ela,
+`src/db.ts` fala com o Postgres pelo `node-postgres`, atrás da mesma interface, e o `int8` é
+lido como `BigInt` nos dois caminhos de propósito — assim a suíte, que roda em PGlite, continua
+valendo como prova do que vai para produção.
+
+Prepare o banco **uma vez** por ambiente, da sua máquina:
+
+```bash
+DATABASE_URL="postgresql://..." SESSION_SECRET=... INVITE_PEPPER=... npm run db:setup
+```
+
+Isso aplica as migrations e semeia as mesas DEMO. O processo que serve o app **não** semeia num
+banco compartilhado: duas instâncias subindo juntas criariam as mesas em duplicata.
+
+### Variáveis obrigatórias em qualquer deploy
+
+| Variável | Por quê |
+|---|---|
+| `DATABASE_URL` | sem ela o estado não atravessa navegadores (ver acima) |
+| `PUBLIC_ORIGIN=https://seu-dominio` | entra no link do convite e no domínio que a carteira exibe ao assinar; errada, o convite aponta para outro lugar |
+| `SESSION_SECRET`, `INVITE_PEPPER` | 32+ caracteres, **fixos**. Com `DATABASE_URL` o app se recusa a subir sem eles: sorteados a cada boot, o pepper novo invalidaria o código dos convites já enviados e o segredo novo derrubaria as sessões em cada reinício |
+| `COOKIE_SECURE=true` | cookies de sessão só por HTTPS |
+| `TRUST_PROXY=1` | atrás de proxy/CDN, para o rate limit por IP ver o cliente e não o proxy |
+
+Gere os segredos uma vez e guarde:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+### Opção A — Vercel (serverless), com Postgres gerenciado
+
+É o que o `vercel.json` do repositório configura: `api/index.ts` envolve o mesmo app Fastify de
+`src/`, e todas as rotas são reescritas para essa função. A CDN serve apenas `vercel-static/`,
+então nenhum fonte do repositório fica público.
+
+Variáveis na Vercel: as da tabela acima, com `PUBLIC_ORIGIN` igual ao domínio de produção.
+`HOST` e `PORT` não se aplicam (não há `listen`).
+
+Com **Supabase**, use a URL do *pooler* (Connection pooling, porta 6543), não a conexão direta:
+a direta é IPv6 e as funções da Vercel saem por IPv4. Saiba também que no plano gratuito o
+projeto **pausa** depois de alguns dias sem uso, e banco pausado = convite recusado.
+
+Duas diferenças de comportamento, não só de desempenho, documentadas em `api/index.ts`:
+
+- **Rate limit por IP** (`src/lib/common.ts`) vive na memória da instância, então conta por
+  instância e fica mais frouxo. A defesa dura contra chute do código do convite não é essa: é o
+  contador no banco, que BLOQUEIA o convite em 5 erros.
+- **O varredor periódico** de convites expirados (`setInterval` em `src/app.ts`) não roda num
+  processo que só vive durante a requisição. A expiração continua acontecendo porque toda rota de
+  convite varre antes de responder — só não acontece com ninguém olhando.
+
+Se esses dois pontos incomodarem, a opção B não tem nenhum dos dois.
+
+### Opção B — processo longo (Render, Railway, Fly, VPS)
+
+É o desenho original e o caminho que a suíte cobre inteiro.
 
 | | |
 |---|---|
@@ -107,26 +167,10 @@ Use Render, Railway, Fly ou um VPS:
 | Start command | `npm start` |
 | Node | 22.18+ |
 
-Variáveis que você **precisa** definir:
-
-| Variável | Por quê |
-|---|---|
-| `HOST=0.0.0.0` | o padrão é `127.0.0.1`, que não aceita tráfego externo: o serviço sobe e fica inacessível |
-| `PUBLIC_ORIGIN=https://seu-dominio` | entra nos links de convite e no domínio que a carteira exibe ao assinar; sem isso os convites apontam para `localhost:8787` |
-| `SESSION_SECRET`, `INVITE_PEPPER` | 32+ caracteres. Em DEMO são sorteados a cada boot, então todo restart desloga todos e invalida convites |
-
-`PORT` costuma ser injetado pela plataforma — o código já o lê. Para o banco sobreviver aos
-deploys, monte um disco persistente em `./data`; sem disco, o DEMO re-semeia a cada boot.
-
-### Vercel: só a pré-visualização, como site estático
-
-O `vercel.json` e o `.vercelignore` do repositório publicam **apenas** `preview/index.html`,
-que é um arquivo único e autossuficiente (backend simulado rodando no navegador, estado em
-`localStorage`). Não há install, não há build e nada do servidor vai para o deploy — o que
-também evita a Vercel rodar `tsc` ao encontrar o `tsconfig.json`, origem do `TS2688`.
-
-Isso serve para **demonstrar a interface**. Não é o app real: sem Postgres, sem convites
-de verdade, sem assinaturas verificadas no servidor.
+Aqui `HOST=0.0.0.0` é obrigatório — o padrão `127.0.0.1` só aceita conexão da própria máquina, e
+o serviço sobe inacessível. `PORT` costuma ser injetado pela plataforma e o código já o lê.
+Funciona com `DATABASE_URL` ou, se preferir PGlite, com um disco persistente montado em `./data`
+(sem disco, o DEMO re-semeia a cada boot e os convites antigos morrem).
 
 Se a plataforma rodar `tsc` por conta própria, o `tsconfig.json` do repositório já está
 configurado para conferir tipos sem emitir. Rodar `tsc` **sem** esse tsconfig é o que produz

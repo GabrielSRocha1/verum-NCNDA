@@ -38,7 +38,7 @@ export interface BuiltApp { app: FastifyInstance; ctx: Ctx; db: Db }
 
 export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS.ProcessEnv; seed?: boolean; logger?: boolean } = {}): Promise<BuiltApp> {
   const cfg = loadConfig(opts.env ?? process.env, opts.config ?? {});
-  const db = await openDb(cfg.dataDir);
+  const db = await openDb({ databaseUrl: cfg.databaseUrl, dataDir: cfg.dataDir });
   const assets = new AssetAdapter(defaultAssetRegistry(), cfg.mainnetEnabled);
   const ctx: Ctx = {
     db, cfg, assets,
@@ -47,7 +47,10 @@ export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS
     limiter: new RateLimiter(() => cfg.now().getTime()),
   };
   await syncAssets(ctx);
-  if (cfg.demoMode && opts.seed !== false) await seedDemo(ctx);
+  // Banco local: semeia o DEMO no boot, como sempre. Banco compartilhado: semear no boot deixaria
+  // dois processos subindo juntos criarem as mesas DEMO em duplicata — ali o seed é passo explícito
+  // do deploy ("npm run db:setup"). opts.seed força qualquer um dos dois.
+  if (cfg.demoMode && (opts.seed ?? db.kind === 'pglite')) await seedDemo(ctx);
 
   const app = Fastify({
     logger: opts.logger ? {

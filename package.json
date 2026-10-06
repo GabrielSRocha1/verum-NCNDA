@@ -8,6 +8,7 @@
     "test": "node --test --test-concurrency=1 test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "db:reset": "node scripts/reset-db.ts",
+    "db:setup": "node scripts/db-setup.ts",
     "vendor": "node scripts/vendor.ts",
     "preview": "node preview/build.mjs",
     "preview:check": "node preview/build.mjs --check"
@@ -17,15 +18,20 @@
     "@electric-sql/pglite": "^0.5.8",
     "@fastify/cookie": "^11.1.2",
     "@fastify/static": "^10.1.5",
+    "@types/node": "^26.6.4",
+    "@types/pg": "^8.23.1",
     "fastify": "^5.12.5",
+    "pg": "^8.23.1",
     "qrcode-generator": "^2.0.4",
     "tweetnacl": "^1.0.3",
-    "@types/node": "^26.6.4",
     "typescript": "^7.0.2"
   },
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite-socket": "^0.2.11"
   }
 }

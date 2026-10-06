@@ -1,6 +1,9 @@
 // Seção 3.9 — 20 testes obrigatórios do convite de acesso único e onboarding.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import nacl from 'tweetnacl';
 import { buildApp, type BuiltApp } from '../src/app.ts';
 import { base58Encode } from '../src/lib/crypto.ts';
@@ -377,4 +380,57 @@ test('20. e2e em DEMO: admin gera → parceiro abre → código → wallet mock 
   assert.equal(room.json().hasOffPlatformLeg, true); assert.match(room.json().honestyNotice, /não verifica/);
   const other = await app.app.inject({ method: 'GET', url: `/api/deals/${await demo1()}`, headers: { cookie: cookieOf(c, 'votc_session')! } });
   assert.equal(other.statusCode, 404);                                                                // autorização por operação
+});
+
+// Num deploy o processo reinicia (novo release, queda, escala). O convite JÁ ENVIADO tem de
+// continuar valendo: o token e o código vivem no banco, e o código é conferido contra o
+// INVITE_PEPPER. Com banco em disco e segredos fixos, reiniciar não pode invalidar nada —
+// era isso que quebrava quando o pepper era sorteado a cada boot.
+test('21. convite criado antes de reiniciar o servidor continua válido depois (banco em disco + segredos fixos)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'votc-restart-'));
+  const persisted = {
+    DATA_DIR: dir, DEMO_MODE: 'true', COOKIE_SECURE: 'false', PUBLIC_ORIGIN: 'http://localhost:8787',
+    SESSION_SECRET: 'segredo-de-sessao-fixo-com-mais-de-32-caracteres',
+    INVITE_PEPPER: 'pepper-de-convite-fixo-com-mais-de-32-caracteres',
+  } as any;
+  try {
+    // ---- processo 1: admin cria a mesa e gera o convite
+    const a1 = await buildApp({ env: persisted });
+    const ch = await a1.app.inject({ method: 'POST', url: '/auth/wallet-challenge', payload: { address: demoAddress('pm01') } });
+    const c1 = ch.json();
+    const login = await a1.app.inject({ method: 'POST', url: '/auth/wallet-verify', payload: { challengeId: c1.challengeId, nonce: c1.nonce, signature: demoSign('pm01', c1.message) } });
+    const adminCookie = cookieOf(login, 'votc_session')!;
+    const deal = await a1.app.inject({ method: 'POST', url: '/api/deals', headers: { cookie: adminCookie }, payload: { kind: 'UNICA', title: 'Teste 21', deliverAssetId: 'USDT:solana-demo', receiveAssetId: 'USD:cash', volumeText: '1.000 USDT', grade: '5/3', roles: ['VENDEDOR', 'COMPRADOR'] } });
+    const dealId = deal.json().dealId;
+    const made = await a1.app.inject({ method: 'POST', url: '/invitations', headers: { cookie: adminCookie }, payload: { dealId, roleKey: 'VENDEDOR', roleSeq: 1 } });
+    assert.equal(made.statusCode, 200, made.body);
+    const { link, code } = made.json();
+    const token = link.split('/i/')[1] as string;
+    await a1.app.close();                                                                             // reinício: processo morre, banco fica
+
+    // ---- processo 2: instância nova, mesmo banco, mesmos segredos
+    const a2 = await buildApp({ env: persisted });
+    try {
+      const o = await a2.app.inject({ method: 'POST', url: '/invite/open', payload: { token }, remoteAddress: freshIp() });
+      assert.equal(o.statusCode, 200, `link criado antes do reinício foi recusado: ${o.body}`);
+      const inviteCookie = cookieOf(o, 'votc_inv')!;
+      const v = await a2.app.inject({ method: 'POST', url: '/invite/verify-code', payload: { token, code }, headers: { cookie: inviteCookie }, remoteAddress: freshIp() });
+      assert.equal(v.statusCode, 200, `código criado antes do reinício foi recusado: ${v.body}`);
+      assert.equal(v.json().summary.role, 'Vendedor');
+      // E o parceiro conclui a entrada normalmente na instância nova.
+      const kp = nacl.sign.keyPair();
+      const wch = await a2.app.inject({ method: 'POST', url: '/invite/wallet-challenge', payload: { token, address: base58Encode(kp.publicKey) }, headers: { cookie: inviteCookie }, remoteAddress: freshIp() });
+      const w = wch.json();
+      const wv = await a2.app.inject({ method: 'POST', url: '/invite/wallet-verify', payload: { token, challengeId: w.challengeId, nonce: w.nonce, signature: base58Encode(nacl.sign.detached(new TextEncoder().encode(w.message), kp.secretKey)) }, headers: { cookie: inviteCookie }, remoteAddress: freshIp() });
+      assert.equal(wv.json().step, 'SIGNUP');
+      await a2.app.inject({ method: 'POST', url: '/invite/signup', payload: { token, fullName: 'Marina Esteves', email: 'marina21@ex.test', phone: '+55 11 90000-0021', country: 'BR' }, headers: { cookie: inviteCookie }, remoteAddress: freshIp() });
+      const done = await a2.app.inject({ method: 'POST', url: '/invite/complete', payload: { token, acceptTerms: true }, headers: { cookie: inviteCookie }, remoteAddress: freshIp() });
+      assert.equal(done.statusCode, 200, done.body);
+      assert.equal(done.json().dealId, dealId);
+    } finally {
+      await a2.app.close();
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

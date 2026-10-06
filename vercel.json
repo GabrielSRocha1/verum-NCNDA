@@ -1,9 +1,18 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "echo 'sem install: previa estatica'",
-  "buildCommand": "echo 'sem build: preview/index.html ja vem pronto no repositorio'",
-  "outputDirectory": "preview",
+  "installCommand": "npm install --omit=dev",
+  "buildCommand": "echo 'sem build: as funcoes TypeScript sao compiladas pela propria Vercel'",
+  "outputDirectory": "vercel-static",
+  "functions": {
+    "api/index.ts": {
+      "includeFiles": "{public,migrations}/**",
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index" }
+  ],
   "headers": [
     {
       "source": "/(.*)",

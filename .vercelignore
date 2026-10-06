@@ -1,23 +1,20 @@
-# A prévia estática precisa de UM arquivo: preview/index.html.
-# Tudo abaixo é código do servidor, fontes do bundle ou ferramenta de build —
-# nada disso é usado nem deve ficar público no deploy da Vercel.
+# O deploy agora é o APP REAL (api/index.ts envolvendo o Fastify de src/), não mais a prévia
+# estática. Fica de fora tudo que não é necessário em tempo de execução.
+#
+# Importante: "outputDirectory" é a pasta vercel-static/, então a CDN só serve o que está lá
+# dentro. O que sobe aqui serve de entrada para a função — não é publicado como arquivo.
 
 node_modules
 data
 
-src
 test
-scripts
-migrations
 docs
+scripts
 
-# public/ é a raiz do PWA servida pelo servidor real. Fica de fora também para a
-# Vercel não confundir com diretório de saída (outputDirectory é "preview").
-public
+# A prévia estática continua no repositório para demonstração offline (abrir o arquivo no
+# navegador), mas não é mais publicada: quem acessa a URL recebe o app real, com servidor e banco.
+preview
 
-# Geradores da prévia: rodam no desenvolvimento, não no deploy.
-preview/build.mjs
-preview/build.py
-
-# Já está embutido dentro do index.html pelo build; servir à parte seria redundante.
-preview/mock-backend.js
+.env
+.env.*
+!.env.example
