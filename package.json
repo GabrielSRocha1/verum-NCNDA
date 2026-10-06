@@ -33,5 +33,8 @@
   },
   "devDependencies": {
     "@electric-sql/pglite-socket": "^0.2.11"
+  },
+  "overrides": {
+    "content-disposition": "^2.0.1"
   }
 }
