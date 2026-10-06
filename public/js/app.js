@@ -83,7 +83,9 @@ function pageFor(r) {
     case 'carteira': return walletPage();
     case 'perfil': return profilePage();
     case 'convites': return invitesPage();
+    case 'participantes': return pickDealPage('participantes', 'Participantes', 'Quem ocupa cada função, o percentual travado de cada um e quem já assinou. Escolha a mesa.');
     case 'documentos': return pickDealPage('documentos', 'Documentos', 'Documentos ficam dentro de cada Deal Room, com versão, hash e aceites.');
+    case 'compliance': return pickDealPage('compliance', 'Compliance', 'Status apenas informativos. A Verum NCNDA não emite aprovação regulatória nem garante legalidade de operações.');
     case 'settlement': return pickDealPage('settlement', 'Settlement', 'Distribuição exata por bps, com resíduo explícito. No DEMO, tudo é simulado.');
     case 'auditoria': return auditPage();
     case 'nova': return newOfferPage();
@@ -95,7 +97,7 @@ function pageFor(r) {
 
 function navItems(desktop) {
   return desktop
-    ? [['dashboard', 'Dashboard', 'home'], ['deals', 'Deals', 'deals'], ['parcerias', 'Parcerias', 'partner'], ['convites', 'Convites', 'invite'], ['documentos', 'Documentos', 'docs'], ['settlement', 'Settlement', 'settle'], ['auditoria', 'Auditoria', 'audit'], ['perfil', 'Perfil', 'profile']]
+    ? [['dashboard', 'Dashboard', 'home'], ['deals', 'Deals', 'deals'], ['parcerias', 'Parcerias', 'partner'], ['participantes', 'Participantes', 'people'], ['convites', 'Convites', 'invite'], ['documentos', 'Documentos', 'docs'], ['compliance', 'Compliance', 'shield'], ['settlement', 'Settlement', 'settle'], ['auditoria', 'Auditoria', 'audit'], ['perfil', 'Perfil', 'profile']]
     : [['home', 'Home', 'home'], ['deals', 'Deals', 'deals'], ['parcerias', 'Parcerias', 'partner'], ['carteira', 'Carteira', 'wallet'], ['perfil', 'Perfil', 'profile']];
 }
 function isCurrent(r, name) {
@@ -161,6 +163,12 @@ async function homePage() {
       : h('div', { class: 'empty-state' }, 'Nenhuma mesa ainda. Crie uma oferta ou aguarde um convite.'));
 }
 
+/** Atalhos diretos para as abas da mesa, sem passar pela Tela de Parceiros. */
+const cardActions = (d) => [
+  h('a', { class: 'btn btn-ghost btn-sm', href: `#/deal/${d.id}/room/participantes` }, 'Ver participantes'),
+  h('a', { class: 'btn btn-ghost btn-sm', href: `#/deal/${d.id}/room/compliance` }, 'Compliance'),
+];
+
 async function listPage(kind) {
   const { deals } = await api('GET', '/api/deals');
   const list = deals.filter((d) => d.offer.kind === kind);
@@ -171,11 +179,11 @@ async function listPage(kind) {
     return h('div', {}, pageHead(title, h('a', { class: 'btn btn-blue btn-sm', href: '#/nova' }, icon('plus'), 'Nova oferta')),
       list.length ? [...byBiz.entries()].map(([biz, ds]) => h('section', {},
         h('div', { class: 'section-title' }, h('h2', {}, biz), h('span', { class: 'small muted' }, `${ds.length} oferta(s)`)),
-        h('div', { class: 'stack' }, ds.map((d) => qualCard(d, { onClick: () => { location.hash = `#/deal/${d.id}`; } })))))
+        h('div', { class: 'stack' }, ds.map((d) => qualCard(d, { onClick: () => { location.hash = `#/deal/${d.id}`; }, actions: cardActions(d) })))))
         : h('div', { class: 'empty-state' }, 'Nenhuma parceria permanente.'));
   }
   return h('div', {}, pageHead(title, h('a', { class: 'btn btn-blue btn-sm', href: '#/nova' }, icon('plus'), 'Nova oferta')),
-    list.length ? h('div', { class: 'stack' }, list.map((d) => qualCard(d, { onClick: () => { location.hash = `#/deal/${d.id}`; } })))
+    list.length ? h('div', { class: 'stack' }, list.map((d) => qualCard(d, { onClick: () => { location.hash = `#/deal/${d.id}`; }, actions: cardActions(d) })))
       : h('div', { class: 'empty-state' }, 'Nenhuma oferta única.'));
 }
 
@@ -338,7 +346,17 @@ function openShareSheet(d) {
       h('button', { class: 'btn btn-ghost btn-block', style: 'margin-top:14px', onclick: () => s.close() }, 'FECHAR'),
     );
     draw({ url: null });
-    api('GET', `/api/deals/${d.id}/share-link`).then(draw).catch((e) => toast(e.message, 'err'));
+    api('GET', `/api/deals/${d.id}/share-link`).then(draw).catch((e) => {
+      // Mesmo recurso opcional da aba Participantes: sem a rota, diz o que é em vez de despejar
+      // "Route GET:/api/... not found" na cara de quem clicou.
+      if (e.status === 404) {
+        s.render(h('h2', {}, 'Link de visualização'),
+          h('p', { class: 'notice notice-info' }, 'Este servidor não oferece link de visualização da mesa. O recurso existe na pré-visualização; para valer aqui, precisa ser implementado no servidor.'),
+          h('button', { class: 'btn btn-ghost btn-block', style: 'margin-top:14px', onclick: () => s.close() }, 'FECHAR'));
+        return;
+      }
+      toast(e.message, 'err');
+    });
   }, { label: 'Link de visualização' });
 }
 const reload = () => render();
@@ -440,7 +458,10 @@ async function tabParticipantes(d) {
   let viewers = null;
   if (d.isAdmin) {
     invites = (await api('GET', `/invitations?dealId=${d.id}`)).invitations;
-    viewers = await api('GET', `/api/deals/${d.id}/viewers`);
+    // Quem abriu o link de visualização da mesa. É recurso OPCIONAL: existe na pré-visualização e
+    // pode não existir no servidor. Rota ausente (404) não pode derrubar a aba inteira — sem ela o
+    // admin ainda precisa chegar aqui para GERAR CONVITE, que é o caminho principal da mesa.
+    viewers = await api('GET', `/api/deals/${d.id}/viewers`).catch((e) => { if (e.status === 404) return null; throw e; });
   }
   const rows = d.participants.map((p) => {
     const live = invites.find((i) => i.roleKey === p.roleKey && i.roleSeq === p.seq && (i.status === 'ATIVO' || i.status === 'ABERTO'));

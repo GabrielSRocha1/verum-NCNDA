@@ -37,6 +37,7 @@ const ICONS = {
   wallet: 'M3 7a2 2 0 0 1 2-2h13v4M3 7v11a2 2 0 0 0 2 2h15V9H5a2 2 0 0 1-2-2zm14 7h.01',
   profile: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21c0-4 4-6 8-6s8 2 8 6',
   invite: 'M4 6h16v12H4zM4 7l8 6 8-6',
+  people: 'M8 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2 20c0-3.2 2.7-5.5 6-5.5s6 2.3 6 5.5M17 8h5M17 13h5M17 18h5',
   docs: 'M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6',
   settle: 'M12 3v18M5 7h14M5 7l-3 7a3 3 0 0 0 6 0zm14 0l-3 7a3 3 0 0 0 6 0z',
   audit: 'M9 4h6v3H9zM6 5H5v16h14V5h-1M9 12h6M9 16h4',

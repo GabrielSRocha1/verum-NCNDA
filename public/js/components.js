@@ -18,7 +18,14 @@ export function commissionTable(lines, gradeTotalBps) {
 }
 
 /** Card de Qualificação: dados básicos, sem encher linguiça. */
-export function qualCard(d, { onClick = null } = {}) {
+/**
+ * @param {object} d
+ * @param {{ onClick?: (() => void) | null, actions?: Node[] }} opts
+ *   actions: atalhos exibidos numa faixa ABAIXO do card, nunca dentro dele. O card clicável é um
+ *   <button>, e link dentro de botão é HTML inválido: quebra navegação por teclado e leitor de
+ *   tela, além de disparar os dois cliques ao mesmo tempo.
+ */
+export function qualCard(d, { onClick = null, actions = [] } = {}) {
   const o = d.offer;
   const [from, to] = d.direction.split(' → ');
   const content = [
@@ -44,9 +51,12 @@ export function qualCard(d, { onClick = null } = {}) {
         h('span', {}, o.validUntil ? `${o.expired ? 'Expirada em' : 'Válida até'} ${fmtDate(o.validUntil)}` : 'Sem validade (permanente)', ` · ${d.code} · v${d.version.no}`),
         h('span', { class: 'kn' }, d.signatures.label))),
   ];
-  return onClick
-    ? h('button', { class: 'qual', onclick: onClick, 'aria-label': `Abrir parceiros de ${o.title}` }, content)
-    : h('div', { class: 'qual', style: 'cursor:default' }, content);
+  const card = onClick
+    ? h('button', { class: `qual${actions.length ? ' qual-attached' : ''}`, onclick: onClick, 'aria-label': `Abrir parceiros de ${o.title}` }, content)
+    : h('div', { class: `qual${actions.length ? ' qual-attached' : ''}`, style: 'cursor:default' }, content);
+  if (!actions.length) return card;
+  return h('div', { class: 'qual-wrap' }, card,
+    h('div', { class: 'qual-actions', 'aria-label': `Atalhos de ${o.title}` }, actions));
 }
 
 /** Card de Parceiro. Ordem e cores vêm de quem chama (índice). */

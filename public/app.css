@@ -137,6 +137,16 @@ input.code-input { font: 600 22px/1 var(--font-mono); letter-spacing: .12em; tex
   color: inherit; width: 100%; padding: 0; cursor: pointer; font: inherit;
 }
 .qual:hover { border-color: #3A4A80; }
+/* Card com faixa de atalhos: os dois elementos são irmãos (link não pode viver dentro de botão),
+   mas a borda compartilhada os faz ler como um cartão só. */
+.qual-wrap { display: flex; flex-direction: column; }
+.qual-attached { border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom: 0; }
+.qual-actions {
+  display: flex; gap: 10px; flex-wrap: wrap; padding: 12px 16px;
+  background: var(--surface-2); border: 1px solid var(--line); border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--r-card) var(--r-card);
+}
+.qual-wrap:hover .qual-attached, .qual-wrap:hover .qual-actions { border-color: #3A4A80; }
 .qual-head { padding: 16px 16px 14px; background: linear-gradient(180deg, var(--surface-2), var(--surface)); border-bottom: 1px solid var(--line); }
 .qual-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .qual-business { font: 600 12px/1.2 var(--font-body); color: #9FB6FF; margin-bottom: 2px; }

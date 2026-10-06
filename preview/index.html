@@ -150,6 +150,16 @@ input.code-input { font: 600 22px/1 var(--font-mono); letter-spacing: .12em; tex
   color: inherit; width: 100%; padding: 0; cursor: pointer; font: inherit;
 }
 .qual:hover { border-color: #3A4A80; }
+/* Card com faixa de atalhos: os dois elementos são irmãos (link não pode viver dentro de botão),
+   mas a borda compartilhada os faz ler como um cartão só. */
+.qual-wrap { display: flex; flex-direction: column; }
+.qual-attached { border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom: 0; }
+.qual-actions {
+  display: flex; gap: 10px; flex-wrap: wrap; padding: 12px 16px;
+  background: var(--surface-2); border: 1px solid var(--line); border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--r-card) var(--r-card);
+}
+.qual-wrap:hover .qual-attached, .qual-wrap:hover .qual-actions { border-color: #3A4A80; }
 .qual-head { padding: 16px 16px 14px; background: linear-gradient(180deg, var(--surface-2), var(--surface)); border-bottom: 1px solid var(--line); }
 .qual-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .qual-business { font: 600 12px/1.2 var(--font-body); color: #9FB6FF; margin-bottom: 2px; }
@@ -3278,6 +3288,7 @@ const ICONS = {
   wallet: 'M3 7a2 2 0 0 1 2-2h13v4M3 7v11a2 2 0 0 0 2 2h15V9H5a2 2 0 0 1-2-2zm14 7h.01',
   profile: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21c0-4 4-6 8-6s8 2 8 6',
   invite: 'M4 6h16v12H4zM4 7l8 6 8-6',
+  people: 'M8 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2 20c0-3.2 2.7-5.5 6-5.5s6 2.3 6 5.5M17 8h5M17 13h5M17 18h5',
   docs: 'M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6',
   settle: 'M12 3v18M5 7h14M5 7l-3 7a3 3 0 0 0 6 0zm14 0l-3 7a3 3 0 0 0 6 0z',
   audit: 'M9 4h6v3H9zM6 5H5v16h14V5h-1M9 12h6M9 16h4',
@@ -3508,7 +3519,14 @@ function commissionTable(lines, gradeTotalBps) {
 }
 
 /** Card de Qualificação: dados básicos, sem encher linguiça. */
-function qualCard(d, { onClick = null } = {}) {
+/**
+ * @param {object} d
+ * @param {{ onClick?: (() => void) | null, actions?: Node[] }} opts
+ *   actions: atalhos exibidos numa faixa ABAIXO do card, nunca dentro dele. O card clicável é um
+ *   <button>, e link dentro de botão é HTML inválido: quebra navegação por teclado e leitor de
+ *   tela, além de disparar os dois cliques ao mesmo tempo.
+ */
+function qualCard(d, { onClick = null, actions = [] } = {}) {
   const o = d.offer;
   const [from, to] = d.direction.split(' → ');
   const content = [
@@ -3534,9 +3552,12 @@ function qualCard(d, { onClick = null } = {}) {
         h('span', {}, o.validUntil ? `${o.expired ? 'Expirada em' : 'Válida até'} ${fmtDate(o.validUntil)}` : 'Sem validade (permanente)', ` · ${d.code} · v${d.version.no}`),
         h('span', { class: 'kn' }, d.signatures.label))),
   ];
-  return onClick
-    ? h('button', { class: 'qual', onclick: onClick, 'aria-label': `Abrir parceiros de ${o.title}` }, content)
-    : h('div', { class: 'qual', style: 'cursor:default' }, content);
+  const card = onClick
+    ? h('button', { class: `qual${actions.length ? ' qual-attached' : ''}`, onclick: onClick, 'aria-label': `Abrir parceiros de ${o.title}` }, content)
+    : h('div', { class: `qual${actions.length ? ' qual-attached' : ''}`, style: 'cursor:default' }, content);
+  if (!actions.length) return card;
+  return h('div', { class: 'qual-wrap' }, card,
+    h('div', { class: 'qual-actions', 'aria-label': `Atalhos de ${o.title}` }, actions));
 }
 
 /** Card de Parceiro. Ordem e cores vêm de quem chama (índice). */
@@ -3875,7 +3896,9 @@ function pageFor(r) {
     case 'carteira': return walletPage();
     case 'perfil': return profilePage();
     case 'convites': return invitesPage();
+    case 'participantes': return pickDealPage('participantes', 'Participantes', 'Quem ocupa cada função, o percentual travado de cada um e quem já assinou. Escolha a mesa.');
     case 'documentos': return pickDealPage('documentos', 'Documentos', 'Documentos ficam dentro de cada Deal Room, com versão, hash e aceites.');
+    case 'compliance': return pickDealPage('compliance', 'Compliance', 'Status apenas informativos. A Verum NCNDA não emite aprovação regulatória nem garante legalidade de operações.');
     case 'settlement': return pickDealPage('settlement', 'Settlement', 'Distribuição exata por bps, com resíduo explícito. No DEMO, tudo é simulado.');
     case 'auditoria': return auditPage();
     case 'nova': return newOfferPage();
@@ -3887,7 +3910,7 @@ function pageFor(r) {
 
 function navItems(desktop) {
   return desktop
-    ? [['dashboard', 'Dashboard', 'home'], ['deals', 'Deals', 'deals'], ['parcerias', 'Parcerias', 'partner'], ['convites', 'Convites', 'invite'], ['documentos', 'Documentos', 'docs'], ['settlement', 'Settlement', 'settle'], ['auditoria', 'Auditoria', 'audit'], ['perfil', 'Perfil', 'profile']]
+    ? [['dashboard', 'Dashboard', 'home'], ['deals', 'Deals', 'deals'], ['parcerias', 'Parcerias', 'partner'], ['participantes', 'Participantes', 'people'], ['convites', 'Convites', 'invite'], ['documentos', 'Documentos', 'docs'], ['compliance', 'Compliance', 'shield'], ['settlement', 'Settlement', 'settle'], ['auditoria', 'Auditoria', 'audit'], ['perfil', 'Perfil', 'profile']]
     : [['home', 'Home', 'home'], ['deals', 'Deals', 'deals'], ['parcerias', 'Parcerias', 'partner'], ['carteira', 'Carteira', 'wallet'], ['perfil', 'Perfil', 'profile']];
 }
 function isCurrent(r, name) {
@@ -3953,6 +3976,12 @@ async function homePage() {
       : h('div', { class: 'empty-state' }, 'Nenhuma mesa ainda. Crie uma oferta ou aguarde um convite.'));
 }
 
+/** Atalhos diretos para as abas da mesa, sem passar pela Tela de Parceiros. */
+const cardActions = (d) => [
+  h('a', { class: 'btn btn-ghost btn-sm', href: `#/deal/${d.id}/room/participantes` }, 'Ver participantes'),
+  h('a', { class: 'btn btn-ghost btn-sm', href: `#/deal/${d.id}/room/compliance` }, 'Compliance'),
+];
+
 async function listPage(kind) {
   const { deals } = await api('GET', '/api/deals');
   const list = deals.filter((d) => d.offer.kind === kind);
@@ -3963,11 +3992,11 @@ async function listPage(kind) {
     return h('div', {}, pageHead(title, h('a', { class: 'btn btn-blue btn-sm', href: '#/nova' }, icon('plus'), 'Nova oferta')),
       list.length ? [...byBiz.entries()].map(([biz, ds]) => h('section', {},
         h('div', { class: 'section-title' }, h('h2', {}, biz), h('span', { class: 'small muted' }, `${ds.length} oferta(s)`)),
-        h('div', { class: 'stack' }, ds.map((d) => qualCard(d, { onClick: () => { location.hash = `#/deal/${d.id}`; } })))))
+        h('div', { class: 'stack' }, ds.map((d) => qualCard(d, { onClick: () => { location.hash = `#/deal/${d.id}`; }, actions: cardActions(d) })))))
         : h('div', { class: 'empty-state' }, 'Nenhuma parceria permanente.'));
   }
   return h('div', {}, pageHead(title, h('a', { class: 'btn btn-blue btn-sm', href: '#/nova' }, icon('plus'), 'Nova oferta')),
-    list.length ? h('div', { class: 'stack' }, list.map((d) => qualCard(d, { onClick: () => { location.hash = `#/deal/${d.id}`; } })))
+    list.length ? h('div', { class: 'stack' }, list.map((d) => qualCard(d, { onClick: () => { location.hash = `#/deal/${d.id}`; }, actions: cardActions(d) })))
       : h('div', { class: 'empty-state' }, 'Nenhuma oferta única.'));
 }
 
@@ -4130,7 +4159,17 @@ function openShareSheet(d) {
       h('button', { class: 'btn btn-ghost btn-block', style: 'margin-top:14px', onclick: () => s.close() }, 'FECHAR'),
     );
     draw({ url: null });
-    api('GET', `/api/deals/${d.id}/share-link`).then(draw).catch((e) => toast(e.message, 'err'));
+    api('GET', `/api/deals/${d.id}/share-link`).then(draw).catch((e) => {
+      // Mesmo recurso opcional da aba Participantes: sem a rota, diz o que é em vez de despejar
+      // "Route GET:/api/... not found" na cara de quem clicou.
+      if (e.status === 404) {
+        s.render(h('h2', {}, 'Link de visualização'),
+          h('p', { class: 'notice notice-info' }, 'Este servidor não oferece link de visualização da mesa. O recurso existe na pré-visualização; para valer aqui, precisa ser implementado no servidor.'),
+          h('button', { class: 'btn btn-ghost btn-block', style: 'margin-top:14px', onclick: () => s.close() }, 'FECHAR'));
+        return;
+      }
+      toast(e.message, 'err');
+    });
   }, { label: 'Link de visualização' });
 }
 const reload = () => render();
@@ -4232,7 +4271,10 @@ async function tabParticipantes(d) {
   let viewers = null;
   if (d.isAdmin) {
     invites = (await api('GET', `/invitations?dealId=${d.id}`)).invitations;
-    viewers = await api('GET', `/api/deals/${d.id}/viewers`);
+    // Quem abriu o link de visualização da mesa. É recurso OPCIONAL: existe na pré-visualização e
+    // pode não existir no servidor. Rota ausente (404) não pode derrubar a aba inteira — sem ela o
+    // admin ainda precisa chegar aqui para GERAR CONVITE, que é o caminho principal da mesa.
+    viewers = await api('GET', `/api/deals/${d.id}/viewers`).catch((e) => { if (e.status === 404) return null; throw e; });
   }
   const rows = d.participants.map((p) => {
     const live = invites.find((i) => i.roleKey === p.roleKey && i.roleSeq === p.seq && (i.status === 'ATIVO' || i.status === 'ABERTO'));
