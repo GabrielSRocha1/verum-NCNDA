@@ -2,8 +2,8 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import cookie from '@fastify/cookie';
 import fstatic from '@fastify/static';
 import { readFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { projectDir } from './lib/paths.ts';
 import { loadConfig, type AppConfig } from './config.ts';
 import { openDb, dbErrorCode, type Db } from './db.ts';
 import { sha256Hex } from './lib/crypto.ts';
@@ -20,7 +20,7 @@ import * as deals from './services/deals.ts';
 import * as ps from './services/partnership.ts';
 import { seedDemo, personaDirectory } from './demo.ts';
 
-const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
+const PUBLIC_DIR = projectDir('public', import.meta.url);
 
 // ---------------------------------------------------------------- schemas
 const S = {

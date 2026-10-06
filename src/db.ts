@@ -3,8 +3,8 @@
 // desenvolvimento e nos testes. As migrations são SQL Postgres padrão — o mesmo schema nos dois.
 import pg from 'pg';
 import { readdir, readFile, mkdir } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { projectDir } from './lib/paths.ts';
 
 export interface Queryable {
   query<T = Record<string, any>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
@@ -21,7 +21,7 @@ export interface Db extends Queryable {
 /** Destino do banco: a URL ganha do diretório; dataDir null = PGlite em memória (testes). */
 export interface DbTarget { databaseUrl?: string | null; dataDir?: string | null }
 
-const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations');
+const MIGRATIONS_DIR = projectDir('migrations', import.meta.url);
 // Chave do lock que serializa migrations concorrentes (dois processos subindo ao mesmo tempo).
 const MIGRATION_LOCK = 0x5645_524d; // 'VERM'
 
