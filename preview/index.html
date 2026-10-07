@@ -3941,6 +3941,10 @@ const TABS = [['resumo', 'Resumo'], ['participantes', 'Participantes'], ['estrut
 
 // ================================================================= boot
 async function boot() {
+  // A Verum Wallet abre as plataformas parceiras dentro de um iframe dela, e quem cria
+  // window.verum é o conector embarcado NESTA página — mas só depois de init(). Pedir primeiro,
+  // procurar depois. Sem conector embarcado, nada acontece e a mesa segue como hoje.
+  state.verumConector = await iniciarConector();
   try {
     state.config = await api('GET', '/api/config');
     if (state.config.demoMode) state.personas = (await api('GET', '/api/demo/personas')).personas;
@@ -4165,7 +4169,7 @@ function accessRequestPage() {
     // lista de personas DEMO conclui — com razão — que a mesa não achou a carteira dele.
     temReal ? null : h('div', { class: 'notice notice-risk', style: 'margin-top:14px' },
       'A Verum Wallet não foi detectada neste navegador. ',
-      state.config?.demoMode ? 'Para o teste, a assinatura vai usar a carteira DEMO.' : 'Instale a extensão para solicitar acesso.'),
+      state.config?.demoMode ? 'Para o teste, a assinatura vai usar a carteira DEMO.' : 'Abra esta mesa pelo app da Verum para conectar sua carteira.'),
     temReal ? null : walletDiagnostico(getAdapter()),
     state.config?.demoMode ? h('p', { class: 'small muted', style: 'margin-top:26px;text-align:center' }, 'DEMO / TESTNET — NO REAL FUNDS') : null);
 }
@@ -4961,8 +4965,15 @@ function walletDiagnostico(ad) {
           h('div', { class: 'row small' }, h('span', { class: 'mono' }, x.onde), h('span', { class: `chip ${x.aceito ? 'chip-ok' : 'chip-status'}` }, x.aceito ? 'aceita' : 'recusada')),
           x.motivo ? h('div', { class: 'small muted' }, x.motivo) : null,
           x.metodos?.length ? h('div', { class: 'hash', style: 'margin-top:4px' }, x.metodos.join(', ')) : null)))
-        : h('p', { class: 'small muted' }, 'Nenhuma carteira injetada neste navegador. A extensão da Verum Wallet se anuncia em window.verum.'),
-      h('p', { class: 'small muted', style: 'margin-top:10px' }, 'A mesa aceita somente a Verum Wallet: outras carteiras aparecem aqui apenas para explicar por que não foram usadas.')));
+        : h('p', { class: 'small muted' }, 'Nenhum provider de carteira nesta página.'),
+      // Como a conexão acontece de verdade: a Verum Wallet é um PWA que abre as plataformas
+      // parceiras dentro de um iframe dela. Quem cria o provider é o conector embarcado AQUI,
+      // conversando com a wallet-mãe. Dizer isso evita procurar extensão que não existe.
+      h('div', { class: 'section-title', style: 'margin-top:12px' }, h('h2', { style: 'font-size:13px' }, 'Ponte com a Verum Wallet')),
+      linha('Conector embarcado', state.verumConector?.disponivel ? 'sim, e respondeu' : 'não'),
+      state.verumConector?.motivo ? linha('Detalhe', state.verumConector.motivo, 'muted') : null,
+      linha('Página dentro de iframe', dentroDeIframe() ? 'sim' : 'não'),
+      h('p', { class: 'small muted', style: 'margin-top:10px' }, 'A carteira não injeta nada em sites de fora: a mesa precisa ser aberta pelo app da Verum e embarcar o conector dela. A mesa aceita somente a Verum Wallet.')));
 }
 
 async function profilePage() {

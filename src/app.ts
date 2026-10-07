@@ -72,16 +72,25 @@ export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS
   await app.register(cookie);
 
   // ---------------------------------------------------------------- headers de segurança
+  // A Verum Wallet é um PWA que abre as plataformas parceiras DENTRO de um iframe dela (o conector
+  // roda no iframe e conversa com a wallet-pai por postMessage). Para a mesa funcionar ali, ela
+  // precisa poder ser enquadrada — mas SÓ por quem estiver em EMBED_ORIGINS. Vazio = comportamento
+  // de sempre: ninguém enquadra.
+  const embarcavel = cfg.embedOrigins.length > 0;
   app.addHook('onSend', async (req, reply, payload) => {
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'no-referrer');
-    reply.header('X-Frame-Options', 'DENY');
+    // X-Frame-Options não tem lista de origens (ALLOW-FROM foi descontinuado e é ignorado): com
+    // embarque ligado ele sai de cena e quem decide é frame-ancestors, que aceita lista.
+    if (!embarcavel) reply.header('X-Frame-Options', 'DENY');
     reply.header('Cross-Origin-Opener-Policy', 'same-origin');
     reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
     reply.header('Content-Security-Policy', [
       "default-src 'self'", "script-src 'self'", "style-src 'self' https://fonts.googleapis.com",
       "font-src 'self' https://fonts.gstatic.com", "img-src 'self' data:", "connect-src 'self'",
-      "manifest-src 'self'", "worker-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'", "object-src 'none'",
+      "manifest-src 'self'", "worker-src 'self'",
+      `frame-ancestors ${embarcavel ? cfg.embedOrigins.join(' ') : "'none'"}`,
+      "base-uri 'none'", "form-action 'self'", "object-src 'none'",
     ].join('; '));
     if (cfg.cookieSecure) reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     if (req.url.startsWith('/api') || req.url.startsWith('/invite') || req.url.startsWith('/auth') || req.url.startsWith('/invitations')) {
@@ -117,7 +126,12 @@ export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS
       if (!ctx.limiter.hit(bucket, k, cfg.rateLimits[bucket])) throw new HttpError(429, 'RATE_LIMITED', 'Muitas tentativas. Aguarde um minuto.');
     }
   };
-  const cookieBase = { httpOnly: true, secure: cfg.cookieSecure, sameSite: 'strict' as const, path: '/' };
+  // Dentro de um iframe de outro domínio, cookie SameSite=Strict simplesmente NÃO é enviado: a
+  // sessão, o cookie do convite e a prova de carteira sumiriam. Embarcado, vira None+Secure, com
+  // Partitioned (CHIPS) para o cookie ficar preso ao par wallet↔mesa em vez de virar rastreador.
+  const cookieBase = cfg.embedOrigins.length
+    ? { httpOnly: true, secure: true, sameSite: 'none' as const, partitioned: true, path: '/' }
+    : { httpOnly: true, secure: cfg.cookieSecure, sameSite: 'strict' as const, path: '/' };
   const setSession = (reply: FastifyReply, uid: string, addr: string, startedAt?: number) => {
     const c = makeSessionCookie(ctx, uid, addr, startedAt);
     reply.setCookie(SESSION_COOKIE, c.value, { ...cookieBase, maxAge: c.maxAgeSec });

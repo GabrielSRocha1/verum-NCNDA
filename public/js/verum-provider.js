@@ -10,8 +10,33 @@
 // signMessage devolvem Promise; o resto do app foi ajustado para esperar (ver core.js).
 import { VERUM_PROVIDER_ID, base58Encode } from './wallet-adapter.js';
 
-/** Onde a extensão pode se anunciar. Ordem = precedência. */
+/** Onde o provider pode aparecer. Ordem = precedência. */
 const CANDIDATOS = ['verum', 'verumWallet', 'VerumWallet', 'verumcrypto'];
+
+/**
+ * A Verum Wallet é um PWA que abre as plataformas parceiras DENTRO de um iframe dela. Nesse
+ * arranjo ela NÃO injeta nada aqui: quem cria `window.verum` é o próprio conector embarcado nesta
+ * página, que conversa com a wallet-pai por postMessage — e ele só monta o provider depois que
+ * `verumConnector.init()` é chamado.
+ *
+ * Então o passo que faltava não era procurar melhor: era PEDIR. Sem conector embarcado nada
+ * acontece e a mesa segue como hoje.
+ */
+export async function iniciarConector(escopo = globalThis) {
+  const c = escopo?.verumConnector;
+  if (!c || typeof c.init !== 'function') return { disponivel: false, motivo: 'conector não embarcado nesta página' };
+  try {
+    const ok = await c.init();
+    return { disponivel: !!ok, motivo: ok ? null : 'conector embarcado, mas sem carteira-mãe (fora do app da Verum)' };
+  } catch (e) {
+    return { disponivel: false, motivo: `conector falhou ao iniciar: ${(e && e.message) || e}` };
+  }
+}
+
+/** Esta página está dentro de um iframe? É o arranjo em que a wallet abre as parceiras. */
+export function dentroDeIframe(escopo = globalThis) {
+  try { return escopo.self !== escopo.top; } catch { return true; }   // cross-origin lança: é iframe
+}
 
 const ehFuncao = (o, k) => typeof o?.[k] === 'function';
 const metodos = (o) => { try { return Object.keys(o).filter((k) => ehFuncao(o, k)).sort(); } catch { return []; } };

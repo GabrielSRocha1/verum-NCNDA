@@ -301,3 +301,39 @@ test('8. a auditoria registra pedido e decisão, sem dado pessoal', async () => 
   assert.doesNotMatch(blob, /@ex\.test/);
   assert.doesNotMatch(blob, /Gabriel Souza Rocha|Joana Pereira Lima/);
 });
+
+test('11. embarque na Verum Wallet: iframe e cookies mudam juntos, e só quando EMBED_ORIGINS manda', async () => {
+  // Fechado (padrão de hoje): ninguém enquadra a mesa e o cookie é Strict.
+  const fechado = await app.app.inject({ method: 'GET', url: '/api/config' });
+  assert.equal(fechado.headers['x-frame-options'], 'DENY');
+  assert.match(fechado.headers['content-security-policy'] as string, /frame-ancestors 'none'/);
+
+  const WALLET = 'https://verumcrypto.com';
+  // seed padrão: precisa da persona pm01 para o login devolver cookie de sessão.
+  const aberto = await buildApp({ env: { ...env, EMBED_ORIGINS: WALLET, COOKIE_SECURE: 'true' } });
+  try {
+    const r = await aberto.app.inject({ method: 'GET', url: '/api/config' });
+    // X-Frame-Options não tem lista de origens: com embarque ligado ele some e quem decide é a CSP.
+    assert.equal(r.headers['x-frame-options'], undefined);
+    assert.match(r.headers['content-security-policy'] as string, new RegExp(`frame-ancestors ${WALLET}`));
+    assert.doesNotMatch(r.headers['content-security-policy'] as string, /frame-ancestors 'none'/);
+
+    // O cookie precisa viajar em iframe de outro domínio: Strict nem seria enviado.
+    const ch = await aberto.app.inject({ method: 'POST', url: '/auth/wallet-challenge', payload: { address: demoAddress('pm01') }, remoteAddress: freshIp() });
+    const c = ch.json();
+    const login = await aberto.app.inject({ method: 'POST', url: '/auth/wallet-verify', remoteAddress: freshIp(), payload: { challengeId: c.challengeId, nonce: c.nonce, signature: (await import('../src/demo.ts')).demoSign('pm01', c.message) } });
+    const cookie = String(login.headers['set-cookie']);
+    assert.match(cookie, /SameSite=None/i);
+    assert.match(cookie, /Secure/i);
+    assert.match(cookie, /Partitioned/i, 'CHIPS: o cookie fica preso ao par wallet↔mesa');
+  } finally { await aberto.app.close(); }
+
+  // SameSite=None sem Secure seria descartado pelo navegador: falha silenciosa, recusada no boot.
+  await assert.rejects(
+    buildApp({ env: { ...env, EMBED_ORIGINS: WALLET, COOKIE_SECURE: 'false' }, seed: false }),
+    /EMBED_ORIGINS exige COOKIE_SECURE=true/);
+  // Origem malformada também não passa: enquadrar é autorização, não palpite.
+  await assert.rejects(
+    buildApp({ env: { ...env, EMBED_ORIGINS: 'verumcrypto.com', COOKIE_SECURE: 'true' }, seed: false }),
+    /EMBED_ORIGINS aceita origens https/);
+});

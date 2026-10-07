@@ -28,6 +28,7 @@ export interface AppConfig {
   verumWalletDownloadUrl: string;
   accessRequests: boolean;       // formulário público de solicitação de acesso ligado?
   smtp: SmtpConfig | null;       // null = envio de e-mail desligado (sem senha configurada)
+  embedOrigins: string[];        // origens que podem carregar a mesa em iframe (a Verum Wallet)
   rateLimits: Record<'open' | 'resume' | 'verifyCode' | 'walletChallenge' | 'walletVerify' | 'authChallenge' | 'authVerify', RateLimitRule>;
   now: () => Date;
 }
@@ -47,6 +48,11 @@ function int(v: string | undefined, d: number, min: number, max: number): number
  * E-mail é opcional: sem SMTP_PASS o envio fica desligado e a interface deixa de prometer retorno
  * por e-mail. Melhor não prometer do que prometer e não entregar.
  */
+/** Lista separada por vírgula, sem itens vazios. */
+function lista(v: string | undefined): string[] {
+  return String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+}
+
 function smtpFrom(env: NodeJS.ProcessEnv): SmtpConfig | null {
   const pass = (env.SMTP_PASS ?? '').trim();
   if (!pass) return null;
@@ -109,6 +115,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     // você estiver de fato recebendo solicitações.
     accessRequests: bool(env.ACCESS_REQUESTS, false),
     smtp: smtpFrom(env),
+    embedOrigins: lista(env.EMBED_ORIGINS),
     rateLimits: {
       open: { max: 10, windowMs: 60_000 },
       resume: { max: 20, windowMs: 60_000 },
@@ -123,6 +130,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
   };
   if (cfg.verumWalletDownloadUrl && !/^https:\/\//.test(cfg.verumWalletDownloadUrl)) {
     throw new Error('VERUM_WALLET_DOWNLOAD_URL deve começar com https://');
+  }
+  for (const o of cfg.embedOrigins) {
+    if (!/^https:\/\/[^\s/]+$/.test(o)) throw new Error(`EMBED_ORIGINS aceita origens https:// sem caminho (recebi "${o}").`);
+  }
+  // SameSite=None exige Secure: sem isso o navegador DESCARTA o cookie e a sessão dentro do iframe
+  // nunca chegaria ao servidor — falha silenciosa, a pior de depurar.
+  if (cfg.embedOrigins.length && !cfg.cookieSecure) {
+    throw new Error('EMBED_ORIGINS exige COOKIE_SECURE=true: cookie de iframe precisa ser SameSite=None; Secure.');
   }
   return cfg;
 }
