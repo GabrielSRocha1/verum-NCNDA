@@ -167,6 +167,10 @@ export function resetAdapter() { state.adapter = null; }
 async function listarContas(ad, only) {
   const out = [];
   for (const p of ad.providers) {
+    // Carteira que declarou não assinar mensagem não serve para a mesa: listá-la seria oferecer uma
+    // escolha que termina em erro, e só para listar seria preciso CONECTAR nela — um pedido de
+    // confirmação na carteira por uma conta que não pode ser usada.
+    if (!podeAssinarMensagem(p)) continue;
     let accs = [];
     try { accs = await p.accounts(); } catch { accs = []; }   // extensão trancada ou recusada: segue sem ela
     for (const a of accs) {
@@ -209,14 +213,18 @@ export async function walletPick({ title = 'Conectar Verum Wallet', allowCreate 
 }
 
 /**
- * Conectar "a Verum Wallet", e não "uma conta": se a extensão real está neste navegador, vai
- * direto nela — quem instalou a carteira não deveria ver uma lista de personas simuladas. O
- * seletor só aparece quando a única coisa disponível é a carteira DEMO.
+ * Conectar "a Verum Wallet", e não "uma conta": se a carteira real está nesta página, vai direto
+ * nela — quem tem a carteira não deveria ver uma lista de personas simuladas. O seletor aparece
+ * quando a única coisa disponível é a DEMO, ou quando a real declarou que não assina mensagem.
  */
 export async function connectVerum({ title = 'Conectar Verum Wallet' } = {}) {
   const ad = getAdapter();
-  const real = ad.providers.find((p) => !p.demo);
-  if (!real) return walletPick({ title });
+  const reais = ad.providers.filter((p) => !p.demo);
+  const real = reais.find(podeAssinarMensagem) ?? reais[0];
+  const demo = ad.providers.find((p) => p.demo);
+  // Carteira real que DECLAROU não assinar mensagem não serve para a mesa. Havendo DEMO, o seletor
+  // é melhor que o beco sem saída: a pessoa vê as duas, etiquetadas, e escolhe sabendo qual é qual.
+  if (!real || (!podeAssinarMensagem(real) && demo)) return walletPick({ title });
   ad.use(real);
   const conta = await real.connect();
   return { ...conta, provider: real, origem: real.label ?? 'Verum Wallet' };
@@ -236,9 +244,24 @@ export async function usarConta(acc) {
   return acc;
 }
 
-/** Há carteira real (extensão) neste navegador? Decide o que a tela promete antes de clicar. */
+/** A carteira real (não DEMO) presente nesta página, se houver. */
+export function carteiraReal() {
+  return getAdapter().providers.find((p) => !p.demo) ?? null;
+}
+
+/** Há carteira real neste navegador? */
 export function temCarteiraReal() {
-  return getAdapter().providers.some((p) => !p.demo);
+  return !!carteiraReal();
+}
+
+/**
+ * Carteira real que SERVE para a mesa: existe E assina mensagem. A distinção não é preciosismo —
+ * dentro do app da Verum existe carteira real que não assina, e prometer "entrar com a Verum
+ * Wallet" ali é prometer o que não acontece.
+ */
+export function temCarteiraUtilizavel() {
+  const real = carteiraReal();
+  return !!real && podeAssinarMensagem(real);
 }
 
 /**

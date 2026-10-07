@@ -3403,16 +3403,24 @@ function normalizarProvider(bruto, nome) {
  * cara de carteira para o diagnóstico mostrar o nome real do objeto que a extensão injetou — é
  * assim que se descobre a API de uma extensão nova sem adivinhar.
  */
+// Coisas NOSSAS que casam com o filtro de nome e não são carteira nenhuma: a lista de origens que o
+// próprio servidor injeta e o conector da Verum (que tem seção própria no diagnóstico). Listá-los
+// como "carteira recusada — formato não reconhecido" é acusar o app de um defeito que não existe.
+const NAO_SAO_CARTEIRA = ['__VERUM_WALLET_ORIGINS__', 'verumConnector'];
+
 function pistasDeCarteira(escopo = globalThis) {
   const out = [];
   let chaves = [];
   try { chaves = Object.keys(escopo); } catch { return out; }
   for (const k of chaves) {
     if (!/verum|wallet|solana|phantom|backpack|sollet|glow/i.test(k)) continue;
+    if (NAO_SAO_CARTEIRA.includes(k)) continue;
     let v;
     try { v = escopo[k]; } catch { continue; }
-    if (!v || typeof v !== 'object') continue;
-    out.push({ onde: `window.${k}`, metodos: metodos(v) });
+    if (!v || typeof v !== 'object' || Array.isArray(v)) continue;   // lista de strings não é provider
+    const m = metodos(v);
+    if (!m.length) continue;                                          // objeto sem método não assina nada
+    out.push({ onde: `window.${k}`, metodos: m });
   }
   return out;
 }
@@ -3639,6 +3647,10 @@ function resetAdapter() { state.adapter = null; }
 async function listarContas(ad, only) {
   const out = [];
   for (const p of ad.providers) {
+    // Carteira que declarou não assinar mensagem não serve para a mesa: listá-la seria oferecer uma
+    // escolha que termina em erro, e só para listar seria preciso CONECTAR nela — um pedido de
+    // confirmação na carteira por uma conta que não pode ser usada.
+    if (!podeAssinarMensagem(p)) continue;
     let accs = [];
     try { accs = await p.accounts(); } catch { accs = []; }   // extensão trancada ou recusada: segue sem ela
     for (const a of accs) {
@@ -3681,14 +3693,18 @@ async function walletPick({ title = 'Conectar Verum Wallet', allowCreate = true,
 }
 
 /**
- * Conectar "a Verum Wallet", e não "uma conta": se a extensão real está neste navegador, vai
- * direto nela — quem instalou a carteira não deveria ver uma lista de personas simuladas. O
- * seletor só aparece quando a única coisa disponível é a carteira DEMO.
+ * Conectar "a Verum Wallet", e não "uma conta": se a carteira real está nesta página, vai direto
+ * nela — quem tem a carteira não deveria ver uma lista de personas simuladas. O seletor aparece
+ * quando a única coisa disponível é a DEMO, ou quando a real declarou que não assina mensagem.
  */
 async function connectVerum({ title = 'Conectar Verum Wallet' } = {}) {
   const ad = getAdapter();
-  const real = ad.providers.find((p) => !p.demo);
-  if (!real) return walletPick({ title });
+  const reais = ad.providers.filter((p) => !p.demo);
+  const real = reais.find(podeAssinarMensagem) ?? reais[0];
+  const demo = ad.providers.find((p) => p.demo);
+  // Carteira real que DECLAROU não assinar mensagem não serve para a mesa. Havendo DEMO, o seletor
+  // é melhor que o beco sem saída: a pessoa vê as duas, etiquetadas, e escolhe sabendo qual é qual.
+  if (!real || (!podeAssinarMensagem(real) && demo)) return walletPick({ title });
   ad.use(real);
   const conta = await real.connect();
   return { ...conta, provider: real, origem: real.label ?? 'Verum Wallet' };
@@ -3708,9 +3724,24 @@ async function usarConta(acc) {
   return acc;
 }
 
-/** Há carteira real (extensão) neste navegador? Decide o que a tela promete antes de clicar. */
+/** A carteira real (não DEMO) presente nesta página, se houver. */
+function carteiraReal() {
+  return getAdapter().providers.find((p) => !p.demo) ?? null;
+}
+
+/** Há carteira real neste navegador? */
 function temCarteiraReal() {
-  return getAdapter().providers.some((p) => !p.demo);
+  return !!carteiraReal();
+}
+
+/**
+ * Carteira real que SERVE para a mesa: existe E assina mensagem. A distinção não é preciosismo —
+ * dentro do app da Verum existe carteira real que não assina, e prometer "entrar com a Verum
+ * Wallet" ali é prometer o que não acontece.
+ */
+function temCarteiraUtilizavel() {
+  const real = carteiraReal();
+  return !!real && podeAssinarMensagem(real);
 }
 
 /**
@@ -4358,7 +4389,11 @@ function loginPage() {
   // Com carteira real na mão o botão vai DIRETO nela. Sem ela, o que abre é a lista de personas
   // simuladas — e aí prometer "Verum Wallet" no botão é o que faz parecer defeito. O rótulo diz o
   // que vai acontecer de verdade.
-  const temReal = temCarteiraReal();
+  const temReal = temCarteiraUtilizavel();
+  // Carteira real conectada que declarou NÃO assinar mensagem: é o caso de dentro do app da Verum
+  // hoje. Avisar antes do clique vale mais que o erro vermelho depois dele.
+  const real = carteiraReal();
+  const naoAssina = !!real && !podeAssinarMensagem(real);
   return h('main', { class: 'gate' }, brand(),
     h('h1', {}, shared ? 'Visualizar operação' : 'Mesa OTC privada'),
     h('p', { class: 'lead' }, shared
@@ -4372,9 +4407,14 @@ function loginPage() {
       class: 'btn btn-ghost btn-block', style: 'margin-top:10px',
       href: state.config?.walletDownloadUrl || WALLET_DOWNLOAD_URL, target: '_blank', rel: 'noopener noreferrer',
     }, 'BAIXAR VERUM WALLET'), err,
-    // Aberta dentro de um iframe e sem carteira real: é o caso de estar no app da Verum com a ponte
-    // falhando. O diagnóstico vive em Perfil → Carteira, que exige sessão — ou seja, justo o que
-    // não se consegue aqui. Então ele aparece nesta tela, recolhido, só nesse caso.
+    // A carteira está conectada e mesmo assim a mesa não entra: sem dizer o porquê ANTES do clique,
+    // a pessoa tenta, leva um erro vermelho e conclui que a mesa está quebrada.
+    naoAssina ? h('div', { class: 'notice notice-risk', style: 'margin-top:14px' },
+      'A Verum Wallet conectada não assina mensagens para plataformas parceiras nesta versão. A mesa entra só por assinatura — é assim que ela prova que a carteira é sua, sem senha. ',
+      state.config?.demoMode ? 'Para seguir testando, entre com a carteira DEMO.' : 'Avise o responsável pela mesa.') : null,
+    // Aberta dentro de um iframe sem carteira que sirva: é o caso de estar no app da Verum com a
+    // ponte falhando — ou com carteira que não assina. O diagnóstico vive em Perfil → Carteira, que
+    // exige sessão, ou seja, justo o que não se consegue aqui. Então aparece nesta tela, recolhido.
     !temReal && dentroDeIframe() ? walletDiagnostico(getAdapter()) : null,
     state.config?.demoMode ? h('div', { class: 'notice notice-info', style: 'margin-top:20px' },
       'DEMO: entre como Rafael Monteiro (Pay Master 01, admin) para ver as três mesas. As demais personas são os parceiros das mesas.') : null,
@@ -4403,7 +4443,8 @@ function accessRequestPage() {
     referral: h('input', { maxlength: '120', placeholder: 'Nome de quem indicou (opcional)' }),
     note: h('textarea', { maxlength: '500', rows: '3', placeholder: 'O que você pretende operar (opcional)' }),
   };
-  const temReal = temCarteiraReal();
+  const temReal = temCarteiraUtilizavel();
+  const naoAssina = temCarteiraReal() && !temReal;
   const btn = h('button', { class: 'btn btn-primary btn-block' }, temReal ? 'CONECTAR VERUM WALLET E ENVIAR' : 'CONECTAR CARTEIRA E ENVIAR');
   const pronto = (email, avisoEnviado) => clear(document.getElementById('app')).append(
     h('main', { class: 'gate' }, brand('Solicitação enviada'),
@@ -4467,10 +4508,12 @@ function accessRequestPage() {
       h('label', { class: 'field' }, h('span', {}, 'Observação'), f.note),
       err, btn),
     h('p', { class: 'small muted', style: 'margin-top:14px' }, 'Ao enviar você assina uma mensagem que prova que a carteira é sua. Não é transação e não movimenta fundos. A mesa nunca pede seed, chave privada ou senha.'),
-    // Dizer QUAL carteira vai assinar, antes do clique. Sem isto, quem instalou a extensão e viu a
-    // lista de personas DEMO conclui — com razão — que a mesa não achou a carteira dele.
+    // Dizer QUAL carteira vai assinar, antes do clique. Sem isto, quem tem a carteira e vê a lista
+    // de personas DEMO conclui — com razão — que a mesa não achou a dele.
     temReal ? null : h('div', { class: 'notice notice-risk', style: 'margin-top:14px' },
-      'A Verum Wallet não foi detectada neste navegador. ',
+      naoAssina
+        ? 'A Verum Wallet conectada não assina mensagens para plataformas parceiras nesta versão, e a solicitação precisa da assinatura para provar que a carteira é sua. '
+        : 'A Verum Wallet não foi detectada neste navegador. ',
       state.config?.demoMode ? 'Para o teste, a assinatura vai usar a carteira DEMO.' : 'Abra esta mesa pelo app da Verum para conectar sua carteira.'),
     temReal ? null : walletDiagnostico(getAdapter()),
     state.config?.demoMode ? h('p', { class: 'small muted', style: 'margin-top:26px;text-align:center' }, 'DEMO / TESTNET — NO REAL FUNDS') : null);
@@ -5273,9 +5316,14 @@ function walletDiagnostico(ad) {
       // conversando com a wallet-mãe. Dizer isso evita procurar extensão que não existe.
       h('div', { class: 'section-title', style: 'margin-top:12px' }, h('h2', { style: 'font-size:13px' }, 'Ponte com a Verum Wallet')),
       linha('Conector embarcado', !state.verumConector?.embarcado ? 'não'
-        : state.verumConector.disponivel ? 'sim, e respondeu' : 'sim, mas a carteira não respondeu'),
-      state.verumConector?.motivo ? linha('Detalhe', state.verumConector.motivo, 'muted') : null,
+        : state.verumConector.disponivel ? 'sim, e respondeu'
+        // Fora de um iframe não existe wallet-mãe para responder: é o estado normal de quem abriu a
+        // mesa no navegador, não uma falha. Dizer "não respondeu" ali alarma sem motivo.
+        : dentroDeIframe() ? 'sim, mas a carteira não respondeu' : 'sim (sem carteira-mãe: a mesa não está no app da Verum)'),
       linha('Página dentro de iframe', dentroDeIframe() ? 'sim' : 'não'),
+      // Texto longo numa linha de rótulo+valor quebra feio e fica ilegível: vai como parágrafo.
+      state.verumConector?.motivo && dentroDeIframe()
+        ? h('p', { class: 'small muted', style: 'margin-top:6px' }, state.verumConector.motivo) : null,
       // A carteira declara no handshake o que sabe fazer. Sem 'signMessage' nessa lista a mesa não
       // funciona ali — ela só entra com assinatura — e é melhor ler isso aqui do que descobrir
       // esperando dois minutos por uma resposta que a carteira não vai dar.

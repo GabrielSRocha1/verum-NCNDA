@@ -242,6 +242,22 @@ test('13d com carteira real, conectar vai DIRETO nela — e não pede confirmaç
   assert.equal(ad.providers.length, 2, 'a DEMO continua existindo para quem não tem a real');
   assert.equal(ad.provider?.demo, false, 'mas a ativa é a real');
 
+  // Carteira real que DECLARA não assinar mensagem (o caso do app da Verum hoje): ir direto nela é
+  // um beco sem saída. Com DEMO por perto, o seletor volta a ser o caminho — e o teste prova pelo
+  // contrário, porque o seletor precisa de document, que aqui não existe.
+  pedidosDeConexao = 0;
+  (globalThis as any).verum = {
+    isVerumWallet: true,
+    capabilities: ['signAndSendPayment', 'getAddresses'],
+    async connect() { pedidosDeConexao += 1; return { publicKey: endereco }; },
+    async signMessage() { throw new Error('não deveria ser chamada'); },
+  };
+  core.resetAdapter();
+  assert.equal(core.temCarteiraReal(), true, 'a carteira existe');
+  assert.equal(core.temCarteiraUtilizavel(), false, 'mas não serve: não assina mensagem');
+  await assert.rejects(core.escolherContaParaEntrar(), /document is not defined/, 'tinha de cair no seletor');
+  assert.equal(pedidosDeConexao, 0, 'não pode conectar numa carteira que declarou não assinar');
+
   delete (globalThis as any).verum;
   core.resetAdapter();
   assert.equal(core.temCarteiraReal(), false, 'sem a real, sobra a DEMO — e aí o seletor é o caminho');

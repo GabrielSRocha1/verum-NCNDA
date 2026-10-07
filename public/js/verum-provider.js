@@ -130,16 +130,24 @@ export function normalizarProvider(bruto, nome) {
  * cara de carteira para o diagnóstico mostrar o nome real do objeto que a extensão injetou — é
  * assim que se descobre a API de uma extensão nova sem adivinhar.
  */
+// Coisas NOSSAS que casam com o filtro de nome e não são carteira nenhuma: a lista de origens que o
+// próprio servidor injeta e o conector da Verum (que tem seção própria no diagnóstico). Listá-los
+// como "carteira recusada — formato não reconhecido" é acusar o app de um defeito que não existe.
+const NAO_SAO_CARTEIRA = ['__VERUM_WALLET_ORIGINS__', 'verumConnector'];
+
 export function pistasDeCarteira(escopo = globalThis) {
   const out = [];
   let chaves = [];
   try { chaves = Object.keys(escopo); } catch { return out; }
   for (const k of chaves) {
     if (!/verum|wallet|solana|phantom|backpack|sollet|glow/i.test(k)) continue;
+    if (NAO_SAO_CARTEIRA.includes(k)) continue;
     let v;
     try { v = escopo[k]; } catch { continue; }
-    if (!v || typeof v !== 'object') continue;
-    out.push({ onde: `window.${k}`, metodos: metodos(v) });
+    if (!v || typeof v !== 'object' || Array.isArray(v)) continue;   // lista de strings não é provider
+    const m = metodos(v);
+    if (!m.length) continue;                                          // objeto sem método não assina nada
+    out.push({ onde: `window.${k}`, metodos: m });
   }
   return out;
 }
