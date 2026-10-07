@@ -209,7 +209,7 @@ test('9. e-mail: avisa a pessoa e o operador, e falha de envio NUNCA derruba a o
       },
     });
     assert.equal(r.statusCode, 200, r.body);
-    await new Promise((res) => setTimeout(res, 50));                           // os avisos saem sem segurar a resposta
+    assert.equal(r.json().emailSent, true, 'a tela só afirma o envio quando ele é confirmado');
     assert.equal(enviados.length, 2, 'avisa quem pediu e quem decide');
     const paraPessoa = enviados.find((m) => m.para === email);
     assert.match(paraPessoa.assunto, /Recebemos sua solicitação/);
@@ -251,6 +251,7 @@ test('9. e-mail: avisa a pessoa e o operador, e falha de envio NUNCA derruba a o
       },
     });
     assert.equal(r.statusCode, 200, 'e-mail quebrado não pode derrubar a solicitação');
+    assert.equal(r.json().emailSent, false, 'e sem mentir que avisou');
     const { userId, envio } = await access.approveRequest(semRede.ctx, email, 'operador');
     assert.ok(userId, 'a conta é criada mesmo sem e-mail');
     assert.equal(envio.ok, false);
@@ -258,6 +259,29 @@ test('9. e-mail: avisa a pessoa e o operador, e falha de envio NUNCA derruba a o
     const { rows } = await semRede.db.query<any>(`SELECT status FROM access_requests WHERE lower(email) = $1`, [email]);
     assert.equal(rows[0].status, 'APROVADO');
   } finally { await semRede.app.close(); }
+});
+
+test('9b. SMTP pendurado não segura a resposta: o teto corta e a solicitação continua de pé', async () => {
+  // Serverless congela a função ao responder, então o envio é aguardado — mas com teto, senão um
+  // SMTP que não responde deixaria a pessoa olhando a tela até o timeout do socket.
+  const pendurado = {
+    enabled: true, remetente: 'x', operador: null,
+    send: () => new Promise<any>(() => {}),                                    // nunca resolve
+    async verify() { return { ok: true }; },
+  };
+  const { enviarComLimite } = await import('../src/services/mailer.ts');
+  const t0 = Date.now();
+  const r = await enviarComLimite(pendurado as any, { para: 'a@b.test', assunto: 'x', texto: 'y' }, 300);
+  const levou = Date.now() - t0;
+  assert.equal(r.ok, false);
+  assert.match(r.motivo!, /sem resposta do servidor de e-mail/);
+  assert.ok(levou < 2000, `o teto tem de cortar rápido (levou ${levou}ms)`);
+
+  // E um envio que explode também não vaza exceção.
+  const explode = { enabled: true, remetente: 'x', operador: null, async send() { throw new Error('boom'); }, async verify() { return { ok: true }; } };
+  const r2 = await enviarComLimite(explode as any, { para: 'a@b.test', assunto: 'x', texto: 'y' }, 300);
+  assert.equal(r2.ok, false);
+  assert.match(r2.motivo!, /boom/);
 });
 
 test('10. sem SMTP configurado o envio fica desligado e a interface não promete e-mail', async () => {

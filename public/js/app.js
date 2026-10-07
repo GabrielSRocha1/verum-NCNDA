@@ -191,13 +191,14 @@ function accessRequestPage() {
   };
   const temReal = temCarteiraReal();
   const btn = h('button', { class: 'btn btn-primary btn-block' }, temReal ? 'CONECTAR VERUM WALLET E ENVIAR' : 'CONECTAR CARTEIRA E ENVIAR');
-  const pronto = (email) => clear(document.getElementById('app')).append(
+  const pronto = (email, avisoEnviado) => clear(document.getElementById('app')).append(
     h('main', { class: 'gate' }, brand('Solicitação enviada'),
       h('h1', {}, 'Solicitação enviada'),
       // Só promete e-mail quando o envio está de fato configurado no servidor. Prometer retorno
       // por e-mail com SMTP desligado seria combinar algo que ninguém vai cumprir.
-      state.config?.emailEnabled
-        ? h('p', { class: 'lead' }, 'Seus dados e a carteira que você assinou ficaram registrados. O responsável pela mesa vai analisar e ',
+      // Só afirma que o e-mail saiu quando o servidor confirmou o envio desta mensagem.
+      state.config?.emailEnabled && avisoEnviado
+        ? h('p', { class: 'lead' }, 'Seus dados e a carteira que você assinou ficaram registrados. Acabamos de enviar uma confirmação, e ',
           h('b', {}, 'o retorno vai para o e-mail que você cadastrou'),
           email ? h('span', { class: 'mono' }, ` (${email})`) : null, '.')
         : h('p', { class: 'lead' }, 'Seus dados e a carteira que você assinou ficaram registrados. O responsável pela mesa vai analisar e retornar pelo contato que você informou.'),
@@ -224,8 +225,8 @@ function accessRequestPage() {
       await ad.provider.connect(acc.key);
       const ch = await api('POST', '/access/request/wallet-challenge', { address: acc.address });
       const signature = await walletSign(ch.message, { title: 'Prova de posse da carteira', action: 'ASSINAR E ENVIAR' });
-      await api('POST', '/access/request', { challengeId: ch.challengeId, nonce: ch.nonce, signature, ...dados });
-      pronto(dados.email);
+      const env = await api('POST', '/access/request', { challengeId: ch.challengeId, nonce: ch.nonce, signature, ...dados });
+      pronto(dados.email, env.emailSent);
     } catch (ex) {
       if (ex.code !== 'CANCELLED') err.textContent = ex.message;
       btn.disabled = false;

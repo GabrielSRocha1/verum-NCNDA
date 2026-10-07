@@ -11,7 +11,7 @@
 import type { Queryable } from '../db.ts';
 import { HttpError, audit, conflict } from '../lib/common.ts';
 import { issueChallenge, consumeChallenge, type Ctx } from './auth.ts';
-import { enviarSemEsperar, type Envio } from './mailer.ts';
+import { enviarComLimite, type Envio } from './mailer.ts';
 import { validateSignup, type SignupInput } from './invitations.ts';
 
 export interface AccessRequestInput extends SignupInput {
@@ -83,9 +83,9 @@ export async function submitRequest(ctx: Ctx, input: AccessRequestInput) {
   });
   if (failure) throw failure;
   const r = out!;
-  // Sem esperar: a pessoa está olhando a tela. SMTP lento ou fora do ar não pode fazer o cadastro
-  // parecer travado — a solicitação já está gravada, o e-mail é aviso.
-  enviarSemEsperar(ctx.mail, {
+  // Aguardado com teto (ver enviarComLimite): em serverless, "dispara e esquece" vira "esquece".
+  // Se estourar o teto, a resposta sai do mesmo jeito — a solicitação já está gravada.
+  const aviso = await enviarComLimite(ctx.mail, {
     para: r.email,
     assunto: 'Recebemos sua solicitação de acesso — VERUM NCNDA',
     texto: [
@@ -99,7 +99,7 @@ export async function submitRequest(ctx: Ctx, input: AccessRequestInput) {
     ].join('\n'),
   });
   if (ctx.mail.operador) {
-    enviarSemEsperar(ctx.mail, {
+    await enviarComLimite(ctx.mail, {
       para: ctx.mail.operador,
       assunto: `Nova solicitação de acesso: ${r.nome} (${r.organization})`,
       texto: [
@@ -114,7 +114,8 @@ export async function submitRequest(ctx: Ctx, input: AccessRequestInput) {
       ].join('\n'),
     });
   }
-  return { id: r.id, status: r.status };
+  // emailSent diz à tela se pode afirmar que o aviso saiu, em vez de prometer no escuro.
+  return { id: r.id, status: r.status, emailSent: aviso.ok };
 }
 
 // ---------------------------------------------------------------- uso pelo comando (scripts/access.ts)

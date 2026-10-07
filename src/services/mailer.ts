@@ -63,7 +63,24 @@ export function createMailer(cfg: AppConfig, logger?: { error: (...a: any[]) => 
   };
 }
 
-/** Dispara sem segurar quem chamou. Usado onde a pessoa está esperando uma resposta HTTP. */
-export function enviarSemEsperar(mailer: Mailer, m: Mensagem): void {
-  mailer.send(m).catch(() => undefined);
+/**
+ * Envia com teto de tempo, sem nunca lançar.
+ *
+ * Por que não "dispara e esquece": num deploy serverless a função é CONGELADA assim que responde,
+ * e trabalho assíncrono pendente morre junto — "dispara e esquece" vira "esquece". Então o envio é
+ * aguardado, mas com teto curto: se o SMTP demorar, a resposta sai mesmo assim e o registro já
+ * está gravado. E-mail continua sem poder derrubar a operação.
+ */
+export async function enviarComLimite(mailer: Mailer, m: Mensagem, ms = 6000): Promise<Envio> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      mailer.send(m),
+      new Promise<Envio>((r) => { timer = setTimeout(() => r({ ok: false, motivo: `sem resposta do servidor de e-mail em ${ms}ms` }), ms); }),
+    ]);
+  } catch (e) {
+    return { ok: false, motivo: (e as Error)?.message ?? String(e) };
+  } finally {
+    clearTimeout(timer);
+  }
 }
