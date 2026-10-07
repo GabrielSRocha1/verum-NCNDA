@@ -202,6 +202,51 @@ test('13b extensão que já está presente também avisa: o adapter pode ter sid
   parar();
 });
 
+test('13d com carteira real, conectar vai DIRETO nela — e não pede confirmação duas vezes', async () => {
+  globalThis.nacl = nacl;
+  // core.js é módulo de navegador: só o armazenamento precisa existir para o adapter DEMO subir.
+  const guarda = () => { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => m.set(k, String(v)), removeItem: (k: string) => m.delete(k) }; };
+  (globalThis as any).localStorage = guarda();
+  (globalThis as any).sessionStorage = guarda();
+
+  const kp = nacl.sign.keyPair();
+  const endereco = base58Encode(kp.publicKey);
+  let pedidosDeConexao = 0;
+  (globalThis as any).verum = {
+    isVerumWallet: true,
+    async connect() { pedidosDeConexao += 1; return { publicKey: endereco }; },
+    async signMessage(bytes: Uint8Array) { return { signature: nacl.sign.detached(bytes, kp.secretKey) }; },
+  };
+
+  const core = await import('../public/js/core.js');
+  core.state.config = { demoMode: true } as any;
+  core.state.personas = [];
+  core.resetAdapter();
+
+  // O seletor chama openSheet, que mexe no document — que aqui não existe. Então, se o caminho de
+  // ENTRAR abrisse a lista de personas DEMO em vez de ir na carteira real, este await explodiria.
+  // É exatamente o defeito relatado: o botão da tela inicial abria o DEMO com a carteira real lá.
+  const acc = await core.escolherContaParaEntrar();
+  assert.equal(acc.address, endereco);
+  assert.equal(acc.origem, 'Verum Wallet');
+  assert.equal(pedidosDeConexao, 1);
+
+  // Deixar a conta ativa não pode pedir confirmação de novo: na carteira real isso é um segundo
+  // pop-up, para a mesma conta que a pessoa acabou de autorizar.
+  await core.usarConta(acc);
+  assert.equal(pedidosDeConexao, 1, 'conectou duas vezes na mesma conta');
+
+  assert.equal(core.temCarteiraReal(), true);
+  // state.adapter nasce null em core.js, então o tipo inferido de getAdapter() é só `null`.
+  const ad = core.getAdapter() as any;
+  assert.equal(ad.providers.length, 2, 'a DEMO continua existindo para quem não tem a real');
+  assert.equal(ad.provider?.demo, false, 'mas a ativa é a real');
+
+  delete (globalThis as any).verum;
+  core.resetAdapter();
+  assert.equal(core.temCarteiraReal(), false, 'sem a real, sobra a DEMO — e aí o seletor é o caminho');
+});
+
 test('13c todo módulo de public/js está registrado nos três lugares que o carregam (casco, prévia, página)', () => {
   const ler = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
   const modulos = readdirSync(new URL('../public/js', import.meta.url)).filter((f) => f.endsWith('.js')).sort();

@@ -222,6 +222,20 @@ export async function connectVerum({ title = 'Conectar Verum Wallet' } = {}) {
   return { ...conta, provider: real, origem: real.label ?? 'Verum Wallet' };
 }
 
+/**
+ * Deixa a conta escolhida ativa. Conectar de novo numa conta JÁ conectada é pedir a confirmação
+ * duas vezes na carteira real — a primeira veio do connectVerum. Escolher conta por chave é
+ * conceito do provider DEMO (ele guarda várias personas); a carteira real conecta a conta ativa
+ * dela e ignora o argumento.
+ */
+export async function usarConta(acc) {
+  const ad = getAdapter();
+  ad.use(acc.provider ?? ad.provider);
+  if (ad.provider.current?.key === acc.key) return acc;
+  await ad.provider.connect(acc.key);
+  return acc;
+}
+
 /** Há carteira real (extensão) neste navegador? Decide o que a tela promete antes de clicar. */
 export function temCarteiraReal() {
   return getAdapter().providers.some((p) => !p.demo);
@@ -268,15 +282,25 @@ export function walletSign(message, { title = 'Assinar mensagem', action = 'ASSI
   });
 }
 
-/** Login sem senha: challenge → assinatura → sessão curta. */
-export async function walletLogin(accountKey = null) {
+/**
+ * Com qual carteira a pessoa entra. Separado do login de propósito: é a regra que já regrediu uma
+ * vez (o botão de entrar abria a lista de personas DEMO com a carteira real disponível) e aqui ela
+ * é verificável sem navegador. Com a carteira real na mão, entrar é "entrar com a Verum Wallet" e
+ * ponto — o seletor é o caminho de quem só tem a DEMO.
+ */
+export async function escolherContaParaEntrar(accountKey = null) {
   const ad = getAdapter();
   const acc = accountKey
     ? (await listarContas(ad, [accountKey]))[0]
-    : await walletPick({ title: 'Entrar com a Verum Wallet' });
+    : await connectVerum({ title: 'Entrar com a Verum Wallet' });
   if (!acc) throw Object.assign(new Error('Conta não encontrada na carteira.'), { code: 'NO_WALLET' });
-  ad.use(acc.provider ?? ad.provider);
-  await ad.provider.connect(acc.key);
+  await usarConta(acc);
+  return acc;
+}
+
+/** Login sem senha: challenge → assinatura → sessão curta. */
+export async function walletLogin(accountKey = null) {
+  const acc = await escolherContaParaEntrar(accountKey);
   const ch = await api('POST', '/auth/wallet-challenge', { address: acc.address });
   const signature = await walletSign(ch.message, { title: 'Entrar na mesa', action: 'ASSINAR E ENTRAR' });
   await api('POST', '/auth/wallet-verify', { challengeId: ch.challengeId, nonce: ch.nonce, signature });
@@ -290,8 +314,8 @@ export async function walletLogin(accountKey = null) {
  */
 export async function walletViewLink(token) {
   const ad = getAdapter();
-  const acc = await walletPick({ title: 'Abrir link de visualização' });
-  await ad.provider.connect(acc.key);
+  const acc = await connectVerum({ title: 'Abrir link de visualização' });
+  await usarConta(acc);
   const ch = await api('POST', `/api/shared/${token}/wallet-challenge`, { address: acc.address });
   const signature = await walletSign(ch.message, { title: 'Prova de posse da carteira', action: 'ASSINAR E ABRIR' });
   return api('POST', `/api/shared/${token}/wallet-verify`, { challengeId: ch.challengeId, nonce: ch.nonce, signature });
@@ -303,8 +327,7 @@ export async function ensureWalletForMe() {
   if (!ad.provider) throw new Error(ad.reason || 'Verum Wallet indisponível.');
   const acc = (await listarContas(ad, null)).find((a) => a.address === state.me?.wallet);
   if (!acc) throw new Error('A carteira desta sessão não está neste aparelho. Entre novamente pela Verum Wallet.');
-  ad.use(acc.provider);
-  await ad.provider.connect(acc.key);
+  await usarConta(acc);
   return acc;
 }
 

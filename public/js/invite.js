@@ -1,5 +1,5 @@
 // Fluxo do parceiro a partir do link /i/:token. O GET da página nunca consome o convite.
-import { h, add, clear, api, toast, brand, getAdapter, resetAdapter, walletPick, walletSign, state } from './core.js';
+import { h, add, clear, api, toast, brand, getAdapter, resetAdapter, connectVerum, usarConta, walletSign, state } from './core.js';
 import { choiceState } from './onboarding-logic.js';
 import { dentroDeIframe } from './verum-provider.js';
 
@@ -118,10 +118,8 @@ export function startInvite(root, token) {
   });
   const connect = async () => {
     try {
-      const acc = await walletPick({ title: 'Conectar Verum Wallet' });
-      const ad = getAdapter();
-      ad.use(acc.provider ?? ad.provider);
-      await ad.provider.connect(acc.key);
+      const acc = await connectVerum({ title: 'Conectar Verum Wallet' });
+      await usarConta(acc);
       const ch = await api('POST', '/invite/wallet-challenge', { token, address: acc.address });
       const signature = await walletSign(ch.message, { title: 'Prova de posse da carteira', action: 'ASSINAR' });
       await busy(async () => {

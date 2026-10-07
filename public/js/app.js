@@ -1,7 +1,7 @@
 // VERUM NCNDA PRIVATE DAPP — cliente (PWA). Roteamento por hash; convite em /i/:token.
 import {
   h, add, clear, icon, api, toast, copy, openSheet, qrSvg, state, brand, getAdapter, walletLogin, walletSign, signFlow,
-  walletViewLink, walletPick, connectVerum, temCarteiraReal, resetAdapter,
+  walletViewLink, connectVerum, usarConta, temCarteiraReal, resetAdapter,
   ensureWalletForMe, fmtDate, short, STATUS_PT, ACTION_PT,
 } from './core.js';
 import { qualCard, partnerCard, openQrSheet, openInviteSheet, showInviteResult, commissionTable, legChips } from './components.js';
@@ -161,18 +161,27 @@ function loginPage() {
   };
   // Quem chega por link de visualização precisa saber o que está abrindo antes de assinar.
   const shared = location.hash.startsWith('#/m/');
+  // Com carteira real na mão o botão vai DIRETO nela. Sem ela, o que abre é a lista de personas
+  // simuladas — e aí prometer "Verum Wallet" no botão é o que faz parecer defeito. O rótulo diz o
+  // que vai acontecer de verdade.
+  const temReal = temCarteiraReal();
   return h('main', { class: 'gate' }, brand(),
     h('h1', {}, shared ? 'Visualizar operação' : 'Mesa OTC privada'),
     h('p', { class: 'lead' }, shared
       ? 'Você abriu um link de visualização de uma operação. Entre com a Verum Wallet para ver a mesa — é só leitura: você não assina nem altera nada.'
       : 'Acesso só por convite. Quem já concluiu o convite entra assinando com a Verum Wallet — sem senha.'),
-    h('button', { class: 'btn btn-primary btn-block', onclick: enter }, 'ENTRAR COM A VERUM WALLET'),
+    h('button', { class: 'btn btn-primary btn-block', onclick: enter },
+      temReal || !state.config?.demoMode ? 'ENTRAR COM A VERUM WALLET' : 'ENTRAR COM CARTEIRA DEMO'),
     // Baixar a carteira DENTRO da própria carteira é absurdo — e abrir aba nova a partir do iframe
     // dela, pior ainda. Com a ponte de pé, o botão sai de cena.
     state.verumConector?.disponivel ? null : h('a', {
       class: 'btn btn-ghost btn-block', style: 'margin-top:10px',
       href: state.config?.walletDownloadUrl || WALLET_DOWNLOAD_URL, target: '_blank', rel: 'noopener noreferrer',
     }, 'BAIXAR VERUM WALLET'), err,
+    // Aberta dentro de um iframe e sem carteira real: é o caso de estar no app da Verum com a ponte
+    // falhando. O diagnóstico vive em Perfil → Carteira, que exige sessão — ou seja, justo o que
+    // não se consegue aqui. Então ele aparece nesta tela, recolhido, só nesse caso.
+    !temReal && dentroDeIframe() ? walletDiagnostico(getAdapter()) : null,
     state.config?.demoMode ? h('div', { class: 'notice notice-info', style: 'margin-top:20px' },
       'DEMO: entre como Rafael Monteiro (Pay Master 01, admin) para ver as três mesas. As demais personas são os parceiros das mesas.') : null,
     h('p', { class: 'small muted', style: 'margin-top:20px' }, 'A mesa nunca pede seed, chave privada ou senha. Não é exchange, corretora nem marketplace aberto.'),
@@ -231,9 +240,7 @@ function accessRequestPage() {
       // Com a extensão instalada, conecta nela direto; só cai no seletor quando a única coisa
       // disponível é a carteira DEMO (caso de teste).
       const acc = await connectVerum({ title: 'Conectar Verum Wallet' });
-      const ad = getAdapter();
-      ad.use(acc.provider ?? ad.provider);
-      await ad.provider.connect(acc.key);
+      await usarConta(acc);
       const ch = await api('POST', '/access/request/wallet-challenge', { address: acc.address });
       const signature = await walletSign(ch.message, { title: 'Prova de posse da carteira', action: 'ASSINAR E ENVIAR' });
       const env = await api('POST', '/access/request', { challengeId: ch.challengeId, nonce: ch.nonce, signature, ...dados });
@@ -244,7 +251,11 @@ function accessRequestPage() {
     }
   };
 
-  return h('main', { class: 'gate' }, brand('Solicitação de acesso'),
+  return h('main', { class: 'gate' },
+    // Sem sessão não há menu nem barra de navegação: sem esta seta, quem abre a solicitação por
+    // curiosidade fica preso na tela (voltar o hash à mão não é caminho que se exija de ninguém).
+    h('a', { class: 'btn btn-ghost btn-sm', href: '#/home', style: 'align-self:flex-start;margin-bottom:16px' }, icon('back'), 'VOLTAR'),
+    brand('Solicitação de acesso'),
     h('h1', {}, 'Solicitar cadastro'),
     h('p', { class: 'lead' }, 'Esta mesa é privada e não tem cadastro aberto. Conte quem você é e qual carteira vai usar: o responsável analisa e, se aprovar, você entra assinando com a Verum Wallet.'),
     h('form', { onsubmit: enviar },
@@ -1062,7 +1073,8 @@ function walletDiagnostico(ad) {
       // parceiras dentro de um iframe dela. Quem cria o provider é o conector embarcado AQUI,
       // conversando com a wallet-mãe. Dizer isso evita procurar extensão que não existe.
       h('div', { class: 'section-title', style: 'margin-top:12px' }, h('h2', { style: 'font-size:13px' }, 'Ponte com a Verum Wallet')),
-      linha('Conector embarcado', state.verumConector?.disponivel ? 'sim, e respondeu' : 'não'),
+      linha('Conector embarcado', !state.verumConector?.embarcado ? 'não'
+        : state.verumConector.disponivel ? 'sim, e respondeu' : 'sim, mas a carteira não respondeu'),
       state.verumConector?.motivo ? linha('Detalhe', state.verumConector.motivo, 'muted') : null,
       linha('Página dentro de iframe', dentroDeIframe() ? 'sim' : 'não'),
       h('p', { class: 'small muted', style: 'margin-top:10px' }, 'A carteira não injeta nada em sites de fora: a mesa precisa ser aberta pelo app da Verum e embarcar o conector dela. A mesa aceita somente a Verum Wallet.')));
