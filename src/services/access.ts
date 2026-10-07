@@ -85,7 +85,10 @@ export async function submitRequest(ctx: Ctx, input: AccessRequestInput) {
   const r = out!;
   // Aguardado com teto (ver enviarComLimite): em serverless, "dispara e esquece" vira "esquece".
   // Se estourar o teto, a resposta sai do mesmo jeito — a solicitação já está gravada.
-  const aviso = await enviarComLimite(ctx.mail, {
+  // Os dois vão JUNTOS: o aviso ao operador não depende do da pessoa, e em sequência a espera
+  // dobrava na tela de quem acabou de assinar.
+  const [aviso] = await Promise.all([
+    enviarComLimite(ctx.mail, {
     para: r.email,
     assunto: 'Recebemos sua solicitação de acesso — VERUM NCNDA',
     texto: [
@@ -97,23 +100,24 @@ export async function submitRequest(ctx: Ctx, input: AccessRequestInput) {
       'Se não foi você quem pediu, ignore esta mensagem — nada foi criado em seu nome.', '',
       'VERUM NCNDA — mesa OTC privada. Nunca pedimos seed, chave privada ou senha.',
     ].join('\n'),
-  });
-  if (ctx.mail.operador) {
-    await enviarComLimite(ctx.mail, {
-      para: ctx.mail.operador,
-      assunto: `Nova solicitação de acesso: ${r.nome} (${r.organization})`,
-      texto: [
-        'Chegou uma solicitação de acesso à mesa.', '',
-        `Nome: ${r.nome}`, `E-mail: ${r.email}`, `Organização: ${r.organization}`,
-        `Carteira (comprovada por assinatura): ${r.wallet}`,
-        `Id da solicitação: ${r.id}`, '',
-        'Para decidir:',
-        '  npm run access -- list',
-        `  npm run access -- approve ${r.id} --por="seu nome"`,
-        `  npm run access -- reject ${r.id} --motivo="..."`,
-      ].join('\n'),
-    });
-  }
+    }),
+    ctx.mail.operador
+      ? enviarComLimite(ctx.mail, {
+        para: ctx.mail.operador,
+        assunto: `Nova solicitação de acesso: ${r.nome} (${r.organization})`,
+        texto: [
+          'Chegou uma solicitação de acesso à mesa.', '',
+          `Nome: ${r.nome}`, `E-mail: ${r.email}`, `Organização: ${r.organization}`,
+          `Carteira (comprovada por assinatura): ${r.wallet}`,
+          `Id da solicitação: ${r.id}`, '',
+          'Para decidir:',
+          '  npm run access -- list',
+          `  npm run access -- approve ${r.id} --por="seu nome"`,
+          `  npm run access -- reject ${r.id} --motivo="..."`,
+        ].join('\n'),
+      })
+      : Promise.resolve({ ok: true } as Envio),
+  ]);
   // emailSent diz à tela se pode afirmar que o aviso saiu, em vez de prometer no escuro.
   return { id: r.id, status: r.status, emailSent: aviso.ok };
 }
