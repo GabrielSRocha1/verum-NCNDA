@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import nacl from 'tweetnacl';
-import { detectVerumProviders, iniciarConector, dentroDeIframe } from '../public/js/verum-provider.js';
+import { detectVerumProviders, iniciarConector, dentroDeIframe, assinaturaVeioPorResgate } from '../public/js/verum-provider.js';
 import { podeAssinarMensagem } from '../public/js/core.js';
 import { base58Encode } from '../public/js/wallet-adapter.js';
 import { base58Decode } from '../src/lib/crypto.ts';
@@ -67,6 +67,10 @@ function montarIframe(origens: string[], chave: nacl.SignKeyPair) {
     }
     return vistas;
   };
+  // Entrega uma mensagem crua aos ouvintes, sem passar pela fila: é como se a wallet-mãe tivesse
+  // mandado algo por conta própria — inclusive o que o conector não sabe casar.
+  win.__entregar = (data: any, origem = WALLET) => { for (const cb of ouvintes) cb({ origin: origem, data }); };
+
   return { win, endereco, paiAtende };
 }
 
@@ -121,6 +125,60 @@ test('2. a lista de origens é usada: a mensagem a assinar não sai para quem n�
   const desfecho = await Promise.race([pedido.then(() => 'ACEITOU'), new Promise((r) => setTimeout(() => r('ignorou'), 150))]);
   assert.equal(desfecho, 'ignorou', 'o conector aceitou assinatura vinda de origem não autorizada');
   pedido.catch(() => undefined);
+});
+
+test('2b. carteira que assina e responde pela OUTRA grafia não deixa a mesa esperando para sempre', async () => {
+  const chave = nacl.sign.keyPair();
+  const { win, endereco, paiAtende } = montarIframe([WALLET], chave);
+  await iniciarConector(win);
+  const [p] = detectVerumProviders(win).providers;
+  // Conectar PRIMEIRO: signMessage conecta sozinho quando não há conta, e aí o teste mediria o
+  // travamento do connect em vez do da assinatura — que é o que se quer provar aqui.
+  const conectando = p.connect(); paiAtende(); await conectando;
+
+  // O conector só casa a resposta por `type: 'VERUM_SIGN_MSG_RESPONSE'` COM campo `id`. O comentário
+  // dele mesmo registra que o protocolo tem duas grafias (`id` e `requestId`). Aqui a wallet-mãe
+  // assina de verdade e responde pela outra — sem a rede de segurança, a promessa nunca resolve.
+  const MSG = 'VERUM NCNDA\nProva de posse de carteira (login)\nNonce: xyz';
+  const assinando = p.signMessage(MSG);
+  await new Promise((r) => setTimeout(r, 10));
+
+  const sig = nacl.sign.detached(new TextEncoder().encode(MSG), chave.secretKey);
+  (win as any).__entregar({
+    type: 'VERUM_SIGN_MSG_RESPONSE',
+    requestId: 'id-que-o-conector-nao-casa',
+    signature: Buffer.from(sig).toString('base64'),
+    publicKey: endereco,
+  });
+
+  const assinatura = await Promise.race([assinando, new Promise((r) => setTimeout(() => r('PENDURADO'), 300))]);
+  assert.notEqual(assinatura, 'PENDURADO', 'a mesa ficou esperando uma resposta que já tinha chegado');
+  // E o que chega tem de ser base58 válido para o servidor: a carteira manda base64.
+  assert.ok(
+    nacl.sign.detached.verify(new TextEncoder().encode(MSG), base58Decode(assinatura as string), base58Decode(endereco)),
+    'a assinatura resgatada precisa passar na verificação do servidor');
+  assert.equal(assinaturaVeioPorResgate(), true, 'o diagnóstico precisa saber que veio pela rede de segurança');
+});
+
+test('2c. a rede de segurança não aceita assinatura de origem fora da lista', async () => {
+  const chave = nacl.sign.keyPair();
+  const { win, endereco, paiAtende } = montarIframe([WALLET], chave);
+  await iniciarConector(win);
+  const [p] = detectVerumProviders(win).providers;
+  const conectando = p.connect(); paiAtende(); await conectando;   // senão o teste mede o connect
+
+  const MSG = 'qualquer coisa';
+  const assinando = p.signMessage(MSG);
+  await new Promise((r) => setTimeout(r, 10));
+  const sig = nacl.sign.detached(new TextEncoder().encode(MSG), chave.secretKey);
+  (win as any).__entregar({
+    type: 'VERUM_SIGN_MSG_RESPONSE', requestId: 'x',
+    signature: Buffer.from(sig).toString('base64'), publicKey: endereco,
+  }, 'https://atacante.exemplo');
+
+  const desfecho = await Promise.race([assinando.then(() => 'ACEITOU'), new Promise((r) => setTimeout(() => r('ignorou'), 250))]);
+  assert.equal(desfecho, 'ignorou', 'aceitou assinatura vinda de origem não autorizada');
+  assinando.catch(() => undefined);
 });
 
 test('3. carteira muda não vira silêncio na tela, e o que ela declara saber é respeitado', async () => {

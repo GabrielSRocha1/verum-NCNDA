@@ -6,7 +6,7 @@ import {
 } from './core.js';
 import { qualCard, partnerCard, openQrSheet, openInviteSheet, showInviteResult, commissionTable, legChips } from './components.js';
 import { startInvite } from './invite.js';
-import { onVerumReady, iniciarConector, dentroDeIframe } from './verum-provider.js';
+import { onVerumReady, iniciarConector, dentroDeIframe, espiarMensagens, mensagensVistas, assinaturaVeioPorResgate } from './verum-provider.js';
 import { pctToBps, bpsToPct } from './onboarding-logic.js';
 
 const root = document.getElementById('app');
@@ -26,6 +26,9 @@ const TABS = [['resumo', 'Resumo'], ['participantes', 'Participantes'], ['estrut
 
 // ================================================================= boot
 async function boot() {
+  // Antes de QUALQUER coisa: o espião do postMessage. Instalado depois do init() ele perderia o
+  // handshake, que é metade da história quando a carteira responde algo que o conector descarta.
+  espiarMensagens();
   // A Verum Wallet abre as plataformas parceiras dentro de um iframe dela, e quem cria
   // window.verum é o conector embarcado NESTA página — mas só depois de init(). Pedir primeiro,
   // procurar depois. Sem conector embarcado, nada acontece e a mesa segue como hoje.
@@ -1121,6 +1124,23 @@ function walletDiagnostico(ad) {
           linha('Assina mensagem', !caps.length ? 'não declarado — a mesa tenta mesmo assim'
             : caps.includes('signMessage') ? 'sim' : 'NÃO — a mesa não consegue entrar com esta carteira',
           caps.length && !caps.includes('signMessage') ? 'form-error' : ''));
+      })(),
+      // O que a carteira realmente mandou. Quando ela mostra a janela, a pessoa assina e a mesa
+      // continua esperando, é aqui que aparece o motivo: nada voltou, voltou de outra origem, ou
+      // voltou com outro nome. Sem isto, o relato possível é "não funcionou".
+      (() => {
+        const vistas = mensagensVistas();
+        if (!dentroDeIframe() && !vistas.length) return null;
+        return h('div', {},
+          h('div', { class: 'section-title', style: 'margin-top:12px' }, h('h2', { style: 'font-size:13px' }, 'Mensagens recebidas da carteira')),
+          // Se a assinatura só passou pela rede de segurança, o conector e a carteira estão falando
+          // grafias diferentes. É o detalhe que fecha o relato para o time da Verum.
+          assinaturaVeioPorResgate() ? h('p', { class: 'small', style: 'color:var(--amber-ink)' },
+            'A última assinatura só foi aceita pela compatibilidade da mesa: a resposta da carteira não casou com o que o conector dela espera (`id` no tipo VERUM_SIGN_MSG_RESPONSE).') : null,
+          vistas.length
+            ? h('div', { class: 'hash', style: 'white-space:pre-wrap' },
+              vistas.map((m) => `${m.tipo}  ←  ${m.origem}\n   campos: ${m.chaves.join(', ') || '(nenhum)'}`).join('\n'))
+            : h('p', { class: 'small muted' }, 'nenhuma mensagem do protocolo VERUM_ chegou nesta página.'));
       })(),
       h('p', { class: 'small muted', style: 'margin-top:10px' }, 'A carteira não injeta nada em sites de fora: a mesa precisa ser aberta pelo app da Verum e embarcar o conector dela. A mesa aceita somente a Verum Wallet.')));
 }

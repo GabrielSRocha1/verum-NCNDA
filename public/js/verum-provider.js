@@ -35,16 +35,102 @@ export async function iniciarConector(escopo = globalThis) {
   }
 }
 
+/**
+ * Espião de postMessage.
+ *
+ * Quando a carteira mostra a janela, a pessoa assina e a mesa continua esperando, só há três
+ * explicações: nada voltou, voltou de uma origem que o conector descarta, ou voltou com um nome ou
+ * um id que ele não reconhece. Adivinhar qual delas é perda de tempo — este ouvinte registra a
+ * FORMA do que chega (origem, tipo, chaves) e a tela mostra, virando print em vez de palpite.
+ *
+ * Deliberadamente NÃO guarda o conteúdo: a assinatura e a mensagem não precisam ir para a tela de
+ * diagnóstico, e dado pessoal muito menos. Chave, não valor.
+ */
+const VISTAS = [];
+const LIMITE = 24;
+let espiando = false;
+
+export function espiarMensagens(escopo = globalThis) {
+  if (espiando || typeof escopo?.addEventListener !== 'function') return () => undefined;
+  espiando = true;
+  const ouvir = (e) => {
+    const d = e?.data;
+    if (!d || typeof d !== 'object') return;
+    const tipo = typeof d.type === 'string' ? d.type : '(sem type)';
+    if (!/^VERUM_/.test(tipo)) return;              // só o protocolo da carteira; o resto é ruído
+    VISTAS.push({
+      origem: e.origin || '(sem origem)',
+      tipo,
+      chaves: Object.keys(d).filter((k) => k !== 'type').sort(),
+    });
+    if (VISTAS.length > LIMITE) VISTAS.shift();
+  };
+  escopo.addEventListener('message', ouvir);
+  return () => { escopo.removeEventListener('message', ouvir); espiando = false; };
+}
+
+/** O que a carteira mandou até agora, na ordem. */
+export function mensagensVistas() { return VISTAS.slice(); }
+
 /** Esta página está dentro de um iframe? É o arranjo em que a wallet abre as parceiras. */
 export function dentroDeIframe(escopo = globalThis) {
   try { return escopo.self !== escopo.top; } catch { return true; }   // cross-origin lança: é iframe
 }
+
+/**
+ * Rede de segurança para a resposta de assinatura.
+ *
+ * O conector só aceita a resposta quando ela vem com o tipo EXATO `VERUM_SIGN_MSG_RESPONSE` e com
+ * o campo `id`. O comentário dele mesmo registra que o protocolo tem duas grafias convivendo (`id`
+ * e `requestId`, §9.1 do getAddresses) — então uma carteira que responda pela outra grafia, ou com
+ * o tipo escrito por extenso, assina de verdade e a mesa fica esperando para sempre.
+ *
+ * Isto NÃO é inventar protocolo: é aceitar a mesma mensagem com o casamento mais frouxo, e só
+ * enquanto há pedido em curso. Aceitar não é confiar: quem julga a assinatura é o SERVIDOR, que a
+ * verifica contra a mensagem e o nonce que ele próprio emitiu. Origem continua filtrada.
+ */
+function ouvirRespostaDeAssinatura(escopo) {
+  let parar = () => undefined;
+  const promessa = new Promise((resolve, reject) => {
+    if (typeof escopo?.addEventListener !== 'function') return;     // sem janela: nada a ouvir
+    const permitidas = Array.isArray(escopo.__VERUM_WALLET_ORIGINS__) ? escopo.__VERUM_WALLET_ORIGINS__ : [];
+    const ouvir = (e) => {
+      if (permitidas.length && !permitidas.includes(e.origin)) return;
+      const d = e?.data;
+      const t = typeof d?.type === 'string' ? d.type : '';
+      if (!/^VERUM_SIGN_(MSG|MESSAGE)_/i.test(t)) return;
+      if (/REJECT/i.test(t)) { parar(); reject(new Error(d.reason || 'USER_REJECTED')); return; }
+      const sig = d.signature ?? d.signedMessage ?? d.result?.signature;
+      if (!sig) return;
+      parar();
+      resolve({ signature: sig, publicKey: d.publicKey, viaResgate: true });
+    };
+    escopo.addEventListener('message', ouvir);
+    parar = () => escopo.removeEventListener?.('message', ouvir);
+  });
+  promessa.catch(() => undefined);     // o perdedor da corrida não pode virar rejeição sem dono
+  return { promessa, parar: () => parar() };
+}
+
+/** Houve resposta que só chegou pela rede de segurança? O diagnóstico conta, e o relato ao time da carteira fica preciso. */
+let resgatou = false;
+export function assinaturaVeioPorResgate() { return resgatou; }
 
 const ehFuncao = (o, k) => typeof o?.[k] === 'function';
 const metodos = (o) => { try { return Object.keys(o).filter((k) => ehFuncao(o, k)).sort(); } catch { return []; } };
 
 /** Marca da Verum: ou o objeto se identifica, ou veio pelo nome reservado dela. */
 const pareceVerum = (o, nome) => !!o && (o.isVerumWallet === true || o.isVerum === true || o.id === VERUM_PROVIDER_ID || CANDIDATOS.includes(nome));
+
+/** base64 → bytes. Devolve null quando não é base64 válido, em vez de explodir no meio da assinatura. */
+function b64ParaBytes(s) {
+  try {
+    const bin = atob(String(s));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch { return null; }
+}
 
 /** Assinatura pode voltar como base58, bytes, ou dentro de { signature }. Normaliza para base58. */
 function paraBase58(resultado) {
@@ -72,7 +158,7 @@ function paraEndereco(v) {
  * Normaliza um objeto injetado para o contrato interno. Devolve null quando a forma não é
  * reconhecida — quem chama registra o motivo para o diagnóstico.
  */
-export function normalizarProvider(bruto, nome) {
+export function normalizarProvider(bruto, nome, escopo = globalThis) {
   if (!pareceVerum(bruto, nome) || !ehFuncao(bruto, 'signMessage')) return null;
   const conectar = ['connect', 'enable', 'requestAccounts'].find((k) => ehFuncao(bruto, k));
   if (!conectar) return null;
@@ -108,14 +194,29 @@ export function normalizarProvider(bruto, nome) {
     async signMessage(message) {
       if (!p.current) await p.connect();
       const bytes = new TextEncoder().encode(message);
-      // Algumas carteiras recebem texto, outras bytes. Tenta bytes (padrão Solana) e cai para texto.
-      let r;
-      try { r = await bruto.signMessage(bytes, 'utf8'); }
-      catch (e) {
-        if (/string|text|argument|invalid/i.test(String(e?.message ?? ''))) r = await bruto.signMessage(message);
-        else throw e;
-      }
-      return paraBase58(r);
+      // A rede de segurança escuta em paralelo: se a carteira responder por uma grafia que o
+      // conector não casa, quem chega primeiro resolve. Instalada ANTES do pedido, senão a resposta
+      // rápida passaria antes do ouvinte existir.
+      const resgate = ouvirRespostaDeAssinatura(escopo);
+      try {
+        // Algumas carteiras recebem texto, outras bytes. Tenta bytes (padrão Solana) e cai para texto.
+        const peloConector = (async () => {
+          try { return await bruto.signMessage(bytes, 'utf8'); }
+          catch (e) {
+            if (/string|text|argument|invalid/i.test(String(e?.message ?? ''))) return bruto.signMessage(message);
+            throw e;
+          }
+        })();
+        const r = await Promise.race([peloConector, resgate.promessa]);
+        if (r?.viaResgate) {
+          resgatou = true;
+          // Contrato do conector: a carteira manda a assinatura em base64. 64 bytes confirmam que
+          // era base64 mesmo; não batendo, devolve como veio (pode já ser base58) e o servidor julga.
+          const b = b64ParaBytes(r.signature);
+          return b && b.length === 64 ? base58Encode(b) : r.signature;
+        }
+        return paraBase58(r);
+      } finally { resgate.parar(); }
     },
   };
   return p;
@@ -158,7 +259,7 @@ export function detectVerumProviders(escopo = globalThis) {
   for (const nome of CANDIDATOS) {
     const bruto = escopo?.[nome];
     if (!bruto || typeof bruto !== 'object') continue;
-    const p = normalizarProvider(bruto, nome);
+    const p = normalizarProvider(bruto, nome, escopo);
     sonda.push({
       onde: `window.${nome}`,
       aceito: !!p,

@@ -1,6 +1,6 @@
 // Núcleo do cliente: DOM seguro (sem innerHTML com dados), API, toast, sheet, ícones, carteira DEMO.
 import { createWalletAdapter } from './wallet-adapter.js';
-import { detectVerumProviders } from './verum-provider.js';
+import { detectVerumProviders, mensagensVistas } from './verum-provider.js';
 
 export const state = { config: null, me: null, personas: [], adapter: null, scroll: {} };
 
@@ -335,7 +335,18 @@ export function walletSign(message, { title = 'Assinar mensagem', action = 'ASSI
         demora = setTimeout(() => {
           estado.className = 'notice notice-risk';
           clear(estado);
-          add(estado, 'A carteira ainda não respondeu. Se nenhuma janela de assinatura apareceu na Verum Wallet, ela pode não atender a pedidos de assinatura de mensagem neste modo.');
+          // "Não respondeu" sozinho não resolve nada: se a pessoa JÁ assinou, o que importa é o que
+          // a carteira mandou de volta e por que não foi aceito. Isto vira print e vira correção.
+          const vistas = mensagensVistas();
+          const depoisDoPedido = vistas.filter((m) => /SIGN_MSG|SIGN_MESSAGE/i.test(m.tipo));
+          add(estado,
+            h('b', {}, 'A carteira ainda não respondeu a este pedido.'),
+            h('p', { style: 'margin-top:6px' }, depoisDoPedido.length
+              ? 'Ela mandou uma resposta de assinatura que o conector não aceitou — veja abaixo o que chegou.'
+              : 'Se você já assinou na Verum Wallet, a resposta não chegou até aqui. O que a carteira mandou:'),
+            h('div', { class: 'hash', style: 'margin-top:8px;white-space:pre-wrap' }, vistas.length
+              ? vistas.map((m) => `${m.tipo}  ←  ${m.origem}\n   campos: ${m.chaves.join(', ') || '(nenhum)'}`).join('\n')
+              : 'nenhuma mensagem do protocolo VERUM_ chegou nesta página.'));
         }, 12000);
 
         p.signMessage(message).then((sig) => { clearTimeout(demora); done = true; s.close(); resolve(sig); })

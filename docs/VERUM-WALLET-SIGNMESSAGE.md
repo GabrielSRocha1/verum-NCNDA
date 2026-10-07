@@ -86,6 +86,38 @@ A wallet declara **`addresses`**. Com esses dois artefatos conversando, `getAddr
 `UNSUPPORTED` sempre — mesmo com a wallet sabendo fazer. Vale conferir o vocabulário de capacidades
 entre conector e wallet; `signAndSendTransaction` e `signAndSendPayment` batem, `addresses` não.
 
+## Atualização 2026-10-07, 18h: a janela passou a aparecer, a resposta não chega
+
+Depois de um ajuste do lado de vocês, a carteira EXIBE a janela de assinatura e a pessoa assina —
+mas a mesa continua esperando. O contexto dela não se perdeu (o sheet segue aberto, com a mensagem
+original à vista), então a resposta ou não foi postada, ou foi postada de um jeito que o conector
+descarta em silêncio. Os dois descartes silenciosos possíveis, no código de vocês:
+
+1. **Casamento por `id`.** O ouvinte faz:
+
+   ```js
+   case 'VERUM_SIGN_MSG_RESPONSE':
+     if (d.id) settleBridge(d.id, { signature: d.signature, publicKey: d.publicKey });
+   ```
+
+   Resposta sem `id` — ou com `requestId`, a outra grafia que o próprio conector documenta no
+   getAddresses (§9.1) — não resolve nada: a promessa fica pendurada até os 120 s e a pessoa vê a
+   mesa parada depois de ter assinado.
+
+2. **Origem.** `isTrustedOrigin(e.origin)` descarta **sem aviso** o que vier de origem fora da lista
+   injetada em `window.__VERUM_WALLET_ORIGINS__`. Se a janela de assinatura responde de uma origem
+   diferente da que enquadra o iframe, a resposta morre aí.
+
+Para não depender disso, a mesa passou a aceitar também a resposta que chega com `requestId` ou com
+o tipo por extenso (`VERUM_SIGN_MESSAGE_RESPONSE`), sempre da origem confiável e só enquanto há
+pedido em curso — a assinatura em si continua sendo verificada pelo servidor contra o nonce que ele
+emitiu, então afrouxar o casamento não afrouxa a segurança. **Ainda assim vale corrigir no conector
+ou na wallet**, porque qualquer outra parceira que use o conector de vocês vai bater no mesmo ponto.
+
+A mesa também passou a registrar a FORMA de tudo que chega por postMessage (origem, tipo e nomes
+dos campos — nunca o conteúdo) e a mostrar no diagnóstico. Se ainda não funcionar, esse print diz
+em qual dos dois casos acima estamos, ou se a resposta não chegou de todo.
+
 ## Enquanto isso
 
 A mesa não finge que entrou. Dentro do app da Verum ela diz, antes do clique, que a carteira não
