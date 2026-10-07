@@ -156,6 +156,16 @@ export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS
       .replace('<meta name="robots" content="noindex">', '<meta name="robots" content="noindex, nofollow, noarchive">')
       .replace(/<title>[^<]*<\/title>/, '<title>Convite privado VERUM NCNDA</title>');
   });
+  // O conector da Verum (public/vendor/verum-connector.js) lê window.__VERUM_WALLET_ORIGINS__ para
+  // saber a quem mandar a mensagem a assinar: SEM a lista ele usa targetOrigin '*' e aceita resposta
+  // de qualquer pai — a assinatura passaria por qualquer página que nos enquadrasse. A lista é a
+  // MESMA de frame-ancestors (EMBED_ORIGINS), e vem do servidor porque a CSP não permite inline.
+  const origensJs = `/* gerado por EMBED_ORIGINS */\nwindow.__VERUM_WALLET_ORIGINS__ = ${JSON.stringify(cfg.embedOrigins)};\n`;
+  app.get('/verum-origins.js', async (_req, reply) => {
+    reply.type('application/javascript; charset=utf-8');
+    reply.header('Cache-Control', 'no-store');   // muda com a variável, sem rebuild
+    return origensJs;
+  });
   await app.register(fstatic, { root: PUBLIC_DIR, prefix: '/', index: ['index.html'], cacheControl: true, maxAge: 0 });
 
   // ---------------------------------------------------------------- configuração pública

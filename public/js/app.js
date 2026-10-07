@@ -151,7 +151,12 @@ function loginPage() {
     try { await walletLogin(); toast('Sessão iniciada.'); render(); }
     catch (e) {
       if (e.code === 'CANCELLED') return;
-      err.textContent = e.code === 'NO_WALLET' ? 'Verum Wallet não encontrada neste aparelho.' : e.message;
+      // Dentro do app da Verum "não encontrada neste aparelho" seria mentira: a carteira está aí, o
+      // que faltou foi a ponte responder. O motivo do conector diz qual dos dois é o caso.
+      err.textContent = e.code !== 'NO_WALLET' ? e.message
+        : dentroDeIframe() && state.verumConector?.motivo
+          ? `A ponte com a Verum Wallet não respondeu: ${state.verumConector.motivo}`
+          : 'Verum Wallet não encontrada neste aparelho.';
     }
   };
   // Quem chega por link de visualização precisa saber o que está abrindo antes de assinar.
@@ -162,7 +167,9 @@ function loginPage() {
       ? 'Você abriu um link de visualização de uma operação. Entre com a Verum Wallet para ver a mesa — é só leitura: você não assina nem altera nada.'
       : 'Acesso só por convite. Quem já concluiu o convite entra assinando com a Verum Wallet — sem senha.'),
     h('button', { class: 'btn btn-primary btn-block', onclick: enter }, 'ENTRAR COM A VERUM WALLET'),
-    h('a', {
+    // Baixar a carteira DENTRO da própria carteira é absurdo — e abrir aba nova a partir do iframe
+    // dela, pior ainda. Com a ponte de pé, o botão sai de cena.
+    state.verumConector?.disponivel ? null : h('a', {
       class: 'btn btn-ghost btn-block', style: 'margin-top:10px',
       href: state.config?.walletDownloadUrl || WALLET_DOWNLOAD_URL, target: '_blank', rel: 'noopener noreferrer',
     }, 'BAIXAR VERUM WALLET'), err,

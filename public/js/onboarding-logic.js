@@ -1,13 +1,22 @@
 // Regras de apresentação da TELA 1 do convite (testadas em node).
-export function choiceState({ walletAvailable, downloadUrl }) {
+//
+// `naVerumWallet` = a mesa está aberta DENTRO do app da Verum (iframe com a ponte de pé). Ali tudo
+// que fala de instalar está errado: a carteira já está na mão de quem lê. E quando a ponte não
+// responde nesse contexto, o problema é a ponte, não a ausência da carteira — mandar a pessoa
+// baixar o que ela está usando é o tipo de instrução que faz desistir do convite.
+export function choiceState({ walletAvailable, downloadUrl, naVerumWallet = false }) {
   return {
     primary: walletAvailable ? 'signup' : 'download',
     signupDisabled: !walletAvailable,
-    signupReason: walletAvailable ? null : 'Verum Wallet não encontrada neste aparelho.',
-    showDownload: !!downloadUrl,
-    downloadUrl: downloadUrl || null,
-    downloadFallback: downloadUrl ? null : 'Peça o link de download ao responsável pela mesa.',
-    afterInstall: 'Depois de instalar, peça um novo link ao responsável pela mesa.',
+    signupReason: walletAvailable ? null
+      : naVerumWallet ? 'A ponte com a Verum Wallet não respondeu. Feche e abra a mesa de novo pelo app da Verum.'
+      : 'Verum Wallet não encontrada neste aparelho.',
+    showDownload: !!downloadUrl && !naVerumWallet,
+    downloadUrl: naVerumWallet ? null : (downloadUrl || null),
+    downloadFallback: naVerumWallet ? 'Você já está no app da Verum: a carteira é a deste aparelho.'
+      : downloadUrl ? null : 'Peça o link de download ao responsável pela mesa.',
+    afterInstall: naVerumWallet ? 'Se a conexão não aparecer, abra a mesa de novo pelo app da Verum.'
+      : 'Depois de instalar, peça um novo link ao responsável pela mesa.',
   };
 }
 

@@ -307,6 +307,10 @@ test('11. embarque na Verum Wallet: iframe e cookies mudam juntos, e só quando 
   const fechado = await app.app.inject({ method: 'GET', url: '/api/config' });
   assert.equal(fechado.headers['x-frame-options'], 'DENY');
   assert.match(fechado.headers['content-security-policy'] as string, /frame-ancestors 'none'/);
+  // Fechado, o conector recebe lista vazia — e não há a quem mandar nada, porque ninguém enquadra.
+  const semOrigens = await app.app.inject({ method: 'GET', url: '/verum-origins.js' });
+  assert.equal(semOrigens.statusCode, 200);
+  assert.match(semOrigens.body, /window\.__VERUM_WALLET_ORIGINS__ = \[\];/);
 
   const WALLET = 'https://verumcrypto.com';
   // seed padrão: precisa da persona pm01 para o login devolver cookie de sessão.
@@ -317,6 +321,13 @@ test('11. embarque na Verum Wallet: iframe e cookies mudam juntos, e só quando 
     assert.equal(r.headers['x-frame-options'], undefined);
     assert.match(r.headers['content-security-policy'] as string, new RegExp(`frame-ancestors ${WALLET}`));
     assert.doesNotMatch(r.headers['content-security-policy'] as string, /frame-ancestors 'none'/);
+
+    // A lista que o conector usa como targetOrigin tem de ser a MESMA de frame-ancestors: lista
+    // vazia o faria mandar a mensagem a assinar para '*', ou seja, para qualquer pai.
+    const origens = await aberto.app.inject({ method: 'GET', url: '/verum-origins.js' });
+    assert.match(String(origens.headers['content-type']), /javascript/);
+    assert.equal(origens.body.match(/__VERUM_WALLET_ORIGINS__ = (\[.*\]);/)?.[1], JSON.stringify([WALLET]));
+    assert.match(String(origens.headers['cache-control']), /no-store/, 'a lista muda com a variável, sem rebuild');
 
     // O cookie precisa viajar em iframe de outro domínio: Strict nem seria enviado.
     const ch = await aberto.app.inject({ method: 'POST', url: '/auth/wallet-challenge', payload: { address: demoAddress('pm01') }, remoteAddress: freshIp() });

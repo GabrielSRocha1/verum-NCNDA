@@ -24,12 +24,14 @@ const CANDIDATOS = ['verum', 'verumWallet', 'VerumWallet', 'verumcrypto'];
  */
 export async function iniciarConector(escopo = globalThis) {
   const c = escopo?.verumConnector;
-  if (!c || typeof c.init !== 'function') return { disponivel: false, motivo: 'conector não embarcado nesta página' };
+  // `embarcado` separa "o arquivo do conector está nesta página" de "a carteira respondeu". Sem essa
+  // distinção, um iframe qualquer seria lido como app da Verum e a tela mandaria recados errados.
+  if (!c || typeof c.init !== 'function') return { embarcado: false, disponivel: false, motivo: 'conector não embarcado nesta página' };
   try {
     const ok = await c.init();
-    return { disponivel: !!ok, motivo: ok ? null : 'conector embarcado, mas sem carteira-mãe (fora do app da Verum)' };
+    return { embarcado: true, disponivel: !!ok, motivo: ok ? null : 'conector embarcado, mas sem carteira-mãe (fora do app da Verum)' };
   } catch (e) {
-    return { disponivel: false, motivo: `conector falhou ao iniciar: ${(e && e.message) || e}` };
+    return { embarcado: true, disponivel: false, motivo: `conector falhou ao iniciar: ${(e && e.message) || e}` };
   }
 }
 

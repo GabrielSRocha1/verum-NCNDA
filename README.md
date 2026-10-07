@@ -38,12 +38,13 @@ Roteiro de aceitação (seção 23 do prompt mestre), todo executável no DEMO:
 ## Arquitetura
 
 ```
-public/            PWA (mobile-first 360px, desktop com sidebar). Sem CDN: tweetnacl e qrcode-generator embarcados em public/vendor.
+public/            PWA (mobile-first 360px, desktop com sidebar). Sem CDN: tweetnacl, qrcode-generator e o conector da Verum embarcados em public/vendor.
   js/app.js        roteador e telas (Home, Parceiros, Deal Room 7 abas, nova oferta, convites, carteira, perfil, dashboard)
   js/invite.js     fluxo do parceiro a partir de /i/:token (TELAS 0–5)
   js/core.js       DOM seguro (sem innerHTML), API, bottom sheet, carteira DEMO, assinaturas
   js/wallet-adapter.js  WalletAdapter do cliente: aceita SOMENTE o provider da Verum Wallet
-  js/verum-provider.js  ponte para a extensão real: detecta, normaliza o que reconhece e não inventa API
+  js/verum-provider.js  ponte para a carteira real: inicia o conector, normaliza o que reconhece e não inventa API
+  vendor/verum-connector.js  conector da própria Verum (não vem do npm): cria window.verum por postMessage com a wallet-mãe
   js/components.js      Card de Qualificação, Card de Parceiro, sheet de QR, sheet de convite
 src/
   app.ts           Fastify: rotas, schemas (additionalProperties:false, sem removeAdditional), headers de segurança, rate limit
@@ -56,7 +57,7 @@ src/
   demo.ts          personas e mesas DEMO (chaves derivadas de sementes PÚBLICAS)
 migrations/        001_schema.sql (20 entidades) · 002_guards.sql (triggers de integridade) · 003_view_link.sql (link de visualização) · 004_view_link_signup.sql (cadastro de visualizador) · 005_access_requests.sql (solicitação de acesso)
 docs/              ARQUITETURA, ADR-001, SEGURANCA (checklist), DEVNET
-test/              64 testes (node --test)
+test/              70 testes (node --test)
 ```
 
 Separação OFF-CHAIN × ON-CHAIN: cadastro, convite, documentos, Deal Room, workflow e auditoria são off-chain. Carteira, assinatura, regras econômicas, escrow, settlement e distribuição ficam atrás de adapters; nesta entrega o único adapter de settlement é o **DEMO_SIMULATED** (nada se move, nenhum selo de proteção é exibido).
@@ -75,6 +76,8 @@ Link de visualização da mesa — admin: `GET/POST /api/deals/:id/share-link` �
 Link de visualização — quem abre: `POST /api/shared/:token/wallet-challenge` · `POST /api/shared/:token/wallet-verify` · `GET /api/shared/:token/gate` · `POST /api/shared/:token/register` · e as leituras `GET /api/shared/:token[/history|/compliance|/documents|/documents/:vid/content|/settlement/preview]`.
 
 Solicitação de acesso (só com `ACCESS_REQUESTS=on`): `POST /access/request/wallet-challenge` · `POST /access/request`.
+
+Embarque na Verum Wallet: `GET /verum-origins.js` — gerado a partir de `EMBED_ORIGINS` (a CSP é `script-src 'self'`, então não há script inline), `no-store` porque segue a variável. É o que o conector lê para falar com a wallet-mãe e só com ela.
 
 Todo input é validado por JSON Schema com `additionalProperties:false`; autorização é por operação (admin ou participante com convite concluído); respostas de convite inválido são sempre a mesma mensagem.
 
@@ -110,7 +113,8 @@ Com banco local (PGlite) **pare o servidor antes de gravar pelo comando** — é
 
 ## Limites honestos
 
-- **Verum Wallet**: o cliente aceita somente `id: 'verum-wallet'`. `public/js/verum-provider.js` é a ponte para a extensão real: procura o objeto injetado (`window.verum` e variantes), reconhece as formas que sabe tratar e normaliza para o contrato interno — mas **não inventa API**. Forma desconhecida não vira provider adivinhado: entra no Diagnóstico (Perfil → Carteira), que mostra o que foi encontrado, o que foi recusado e por quê. Em DEMO o provider simulado continua existindo e **convive** com a extensão: o seletor mostra as duas. O servidor não consegue saber qual software gerou a assinatura; a UI **não** afirma "autocustódia verificada". Deep link segue oculto (extensão não tem; app de celular não está implementado).
+- **Verum Wallet**: o cliente aceita somente `id: 'verum-wallet'`. `public/js/verum-provider.js` é a ponte: reconhece as formas que sabe tratar e normaliza para o contrato interno — mas **não inventa API**. Forma desconhecida não vira provider adivinhado: entra no Diagnóstico (Perfil → Carteira), que mostra o que foi encontrado, o que foi recusado e por quê. Em DEMO o provider simulado continua existindo e **convive** com o real: o seletor mostra os dois. O servidor não consegue saber qual software gerou a assinatura; a UI **não** afirma "autocustódia verificada". Deep link segue oculto (app de celular não está implementado).
+- **Mesa como dApp dentro da Verum Wallet** (`EMBED_ORIGINS`): a carteira é um PWA que abre as plataformas parceiras num iframe dela, e **quem cria `window.verum` é o conector dela** (`public/vendor/verum-connector.js`, vendorizado), conversando com a wallet-mãe por postMessage — nada é injetado na página. Ligado, três coisas mudam juntas: `frame-ancestors` passa a aceitar essas origens (e `X-Frame-Options` sai de cena, pois não tem lista), os cookies viram `SameSite=None; Secure; Partitioned` (Strict não viaja em iframe de outro domínio), e `/verum-origins.js` entrega a mesma lista ao conector — sem ela ele cairia no modo permissivo, mandando a mensagem a assinar com `targetOrigin: '*'`. Com mais de uma origem, **a primeira é a que vale** quando o navegador não manda `referrer`. O conector é código de terceiro: `test/06-conector-verum.test.ts` simula a wallet-mãe e confere que a assinatura que chega é válida para a mensagem assinada, para uma versão nova dele não quebrar a mesa em silêncio.
 - **Solana Devnet / contrato**: não implementados nesta entrega (fases 13/14). `SOLANA_NETWORK=solana-devnet` é aceito pela configuração, mas o adapter de blockchain se declara indisponível. Veja `docs/DEVNET.md` e `docs/ADR-001-distribuicao-n-participantes.md`.
 - **Mainnet**: recusada. Só depois de testes, revisão de segurança, auditoria independente e autorização explícita.
 - **Postgres de servidor**: incluído (`node-postgres`, ligado por `DATABASE_URL`) e exercitado pelo protocolo real do Postgres — migrations, transações com rollback, seed DEMO e o fluxo inteiro do convite. O que **não** foi exercitado é um provedor específico: TLS com CA do provedor, comportamento do pooler sob carga e limites de conexão só se confirmam no ambiente de verdade.

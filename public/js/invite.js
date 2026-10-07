@@ -1,6 +1,7 @@
 // Fluxo do parceiro a partir do link /i/:token. O GET da página nunca consome o convite.
 import { h, add, clear, api, toast, brand, getAdapter, resetAdapter, walletPick, walletSign, state } from './core.js';
 import { choiceState } from './onboarding-logic.js';
+import { dentroDeIframe } from './verum-provider.js';
 
 const GENERIC = 'Este convite não é mais válido. Peça um novo link.';
 
@@ -40,7 +41,10 @@ export function startInvite(root, token) {
       add(wrap, h('h1', {}, 'Convite indisponível'), h('p', { class: 'lead' }, st.invalidReason || GENERIC));
     } else if (st.step === 'CHOICE') {
       const ad = getAdapter();
-      const cs = choiceState({ walletAvailable: ad.isAvailable(), downloadUrl: state.config?.walletDownloadUrl });
+      const cs = choiceState({
+        walletAvailable: ad.isAvailable(), downloadUrl: state.config?.walletDownloadUrl,
+        naVerumWallet: dentroDeIframe() && !!state.verumConector?.embarcado,
+      });
       add(wrap, progress(),
         h('h1', {}, 'Como você quer seguir?'),
         h('p', { class: 'lead' }, 'Para entrar na mesa você precisa da Verum Wallet, a carteira de autocustódia em que as chaves ficam só com você.'),

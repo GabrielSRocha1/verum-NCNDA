@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import nacl from 'tweetnacl';
 import { parseGrade, splitBps, validateLines, distribute, formatBps, parseUnits, formatUnits, toUiAmountString, percentToBps, type AllocationLine } from '../src/lib/bps.ts';
 import { templateLines } from '../src/services/partnership.ts';
@@ -119,6 +119,15 @@ test('12 WalletAdapter (cliente): recusa providers que não sejam a Verum Wallet
   assert.ok(miss.downloadFallback, 'sem downloadUrl, o fallback tem de existir'); assert.match(miss.downloadFallback, /Peça o link/);
   const ok = choiceState({ walletAvailable: true, downloadUrl: 'https://x' });
   assert.equal(ok.primary, 'signup'); assert.equal(ok.signupDisabled, false); assert.equal(ok.showDownload, true);
+
+  // Dentro do app da Verum nada pode mandar instalar a carteira que a pessoa está usando — nem
+  // quando a ponte falha, porque aí o problema é a ponte, não a ausência da carteira.
+  const naWallet = choiceState({ walletAvailable: false, downloadUrl: 'https://x', naVerumWallet: true });
+  assert.equal(naWallet.showDownload, false, 'baixar a carteira dentro dela mesma');
+  assert.equal(naWallet.downloadUrl, null);
+  assert.match(naWallet.signupReason!, /ponte com a Verum Wallet não respondeu/);
+  assert.doesNotMatch(naWallet.afterInstall, /instalar/);
+  assert.doesNotMatch(naWallet.downloadFallback!, /download|instalar/i);
   assert.equal(pctToBps('3,33'), 333); assert.equal(pctToBps('abc'), null);
 });
 
@@ -191,6 +200,31 @@ test('13b extensão que já está presente também avisa: o adapter pode ter sid
   await new Promise((r) => setTimeout(r, 700));
   assert.equal(avisouTarde, 1, 'carteira que injeta depois do render tem de ser notada');
   parar();
+});
+
+test('13c todo módulo de public/js está registrado nos três lugares que o carregam (casco, prévia, página)', () => {
+  const ler = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+  const modulos = readdirSync(new URL('../public/js', import.meta.url)).filter((f) => f.endsWith('.js')).sort();
+  assert.ok(modulos.length >= 6, 'lista de módulos vazia indica caminho errado, não projeto sem módulos');
+
+  // Este teste existe porque verum-provider.js nasceu sem entrar em nenhuma das três listas: o
+  // bundle da prévia chamava detectVerumProviders() sem nunca definir, e o service worker guardava
+  // um casco incompleto. Nada disso aparece no typecheck nem no preview:check — só ao abrir a tela.
+  const sw = ler('public/sw.js'), prevJs = ler('preview/build.mjs'), prevPy = ler('preview/build.py');
+  for (const m of modulos) {
+    assert.ok(sw.includes(`'/js/${m}'`), `${m} fora do SHELL de public/sw.js (casco do PWA incompleto)`);
+    assert.ok(prevJs.includes(`'${m}'`), `${m} fora do ORDER de preview/build.mjs (prévia sem a definição)`);
+    assert.ok(prevPy.includes(`'${m}'`), `${m} fora do order de preview/build.py (os dois builds têm de bater)`);
+  }
+
+  // app.js é o único ponto de entrada: os outros chegam por import. E o conector da Verum, que não é
+  // nosso e não é módulo, entra por <script> antes dele — depois seria tarde, o boot já teria rodado.
+  const html = ler('public/index.html');
+  assert.match(html, /<script type="module" src="\/js\/app\.js">/);
+  const ordem = ['/verum-origins.js', '/vendor/verum-connector.js', '/js/app.js'].map((s) => html.indexOf(s));
+  assert.ok(ordem.every((i) => i > 0) && ordem[0] < ordem[1] && ordem[1] < ordem[2], 'origens → conector → app, nesta ordem');
+  assert.ok(sw.includes("'/vendor/verum-connector.js'"), 'conector fora do SHELL: sem rede, a mesa abriria sem a ponte');
+  assert.ok(!sw.includes("'/verum-origins.js'"), 'verum-origins.js é gerado por EMBED_ORIGINS: no casco, a lista congelaria');
 });
 
 function luminance(hex: string): number {

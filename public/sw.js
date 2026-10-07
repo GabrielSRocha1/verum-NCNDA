@@ -1,6 +1,8 @@
 // Service worker: guarda só o "casco" do app. Nunca guarda API, convite, login ou dados de operação.
-const CACHE = 'votc-shell-v2';
-const SHELL = ['/', '/app.css', '/js/app.js', '/js/core.js', '/js/components.js', '/js/invite.js', '/js/wallet-adapter.js', '/js/onboarding-logic.js', '/vendor/nacl-fast.min.js', '/vendor/qrcode.js', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png'];
+const CACHE = 'votc-shell-v3';
+// /verum-origins.js fica FORA de propósito: é gerado a partir de EMBED_ORIGINS e tem de refletir a
+// variável de hoje, não a de quando o casco foi guardado. Sem cache de execução, ele vai à rede.
+const SHELL = ['/', '/app.css', '/js/app.js', '/js/core.js', '/js/components.js', '/js/invite.js', '/js/wallet-adapter.js', '/js/verum-provider.js', '/js/onboarding-logic.js', '/vendor/nacl-fast.min.js', '/vendor/qrcode.js', '/vendor/verum-connector.js', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));

@@ -6,7 +6,10 @@ def strip_module(src):
     src = re.sub(r"^import\s*\{[^}]*\}\s*from\s*'[^']+';", "", src, flags=re.M)
     src = re.sub(r"^export\s+(?=(async\s+)?function|const|let|class)", "", src, flags=re.M)
     return src
-order = ['onboarding-logic.js', 'wallet-adapter.js', 'core.js', 'components.js', 'invite.js', 'app.js']
+order = ['onboarding-logic.js', 'wallet-adapter.js', 'verum-provider.js', 'core.js', 'components.js', 'invite.js', 'app.js']
+# Arquivo novo em public/js fora do order vira bundle sem a definição (a prévia só quebra ao abrir).
+faltando = sorted(p.name for p in (pub / 'js').glob('*.js') if p.name not in order)
+assert not faltando, f"arquivos em public/js fora do order: {', '.join(faltando)}"
 parts = []
 for f in order:
     s = strip_module((pub / 'js' / f).read_text())
@@ -17,11 +20,11 @@ for f in order:
         s = s.replace("  if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('/sw.js').catch(() => undefined);\n", "")
         s = s.replace("return state.config?.demoMode ? h('div', { class: 'demo-ribbon' }, 'DEMO / TESTNET — NO REAL FUNDS') : null;",
                       "return h('div', { class: 'demo-ribbon' }, 'PRÉ-VISUALIZAÇÃO · DEMO / TESTNET — NO REAL FUNDS · ', h('button', { class: 'ribbon-reset', onclick: () => window.__votcPreviewReset() }, 'reiniciar demo'));")
-        s = s.replace("h('a', { class: 'btn btn-ghost btn-sm', href: `/api/deals/${d.id}/documents/${doc.versionId}/content` }, 'BAIXAR')",
-                      "h('a', { class: 'btn btn-ghost btn-sm', href: doc.downloadUrl, download: doc.name }, 'BAIXAR')")
         s = s.replace("async function render() {\n", "async function render() {\n  if (location.hash.startsWith('#/i/')) { location.reload(); return; }\n")
         assert "startsWith('#/i/')) { location.reload()" in s
-        assert 'location.hash.match' in s and 'ribbon-reset' in s and 'doc.downloadUrl' in s and 'serviceWorker' not in s
+        # doc.downloadUrl (data: URI do mock) sem substituição: o app já o prefere, pois sem servidor
+        # não existe rota de conteúdo.
+        assert 'location.hash.match' in s and 'ribbon-reset' in s and 'doc.downloadUrl ||' in s and 'serviceWorker' not in s
     if f == 'invite.js':
         s = s.replace("location.replace(`/#/deal/${r.dealId}`);", "location.hash = `#/deal/${r.dealId}`; location.reload();")
         assert 'location.reload()' in s

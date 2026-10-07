@@ -33,7 +33,16 @@ const stripModule = (src) => src
   .replace(/^import\s*\{[^}]*\}\s*from\s*'[^']+';/gm, '')
   .replace(/^export\s+(?=(async\s+)?function|const|let|class)/gm, '');
 
-const ORDER = ['onboarding-logic.js', 'wallet-adapter.js', 'core.js', 'components.js', 'invite.js', 'app.js'];
+const ORDER = ['onboarding-logic.js', 'wallet-adapter.js', 'verum-provider.js', 'core.js', 'components.js', 'invite.js', 'app.js'];
+
+// Arquivo novo em public/js que ninguém põe aqui vira bundle sem a definição: a prévia só quebra
+// quando alguém abre, e o --check não pega (ele compara o gerado com as fontes, não executa).
+{
+  const noDisco = fs.readdirSync(path.join(pub, 'js')).filter((f) => f.endsWith('.js')).sort();
+  const faltando = noDisco.filter((f) => !ORDER.includes(f));
+  if (faltando.length) fail(`arquivos em public/js fora do ORDER: ${faltando.join(', ')}. Inclua na ordem certa.`);
+}
+
 const parts = [];
 
 for (const f of ORDER) {
@@ -51,16 +60,14 @@ for (const f of ORDER) {
     s = s.replace(
       "return state.config?.demoMode ? h('div', { class: 'demo-ribbon' }, 'DEMO / TESTNET — NO REAL FUNDS') : null;",
       "return h('div', { class: 'demo-ribbon' }, 'PRÉ-VISUALIZAÇÃO · DEMO / TESTNET — NO REAL FUNDS · ', h('button', { class: 'ribbon-reset', onclick: () => window.__votcPreviewReset() }, 'reiniciar demo'));");
-    // Download de documento vira data: URI — não existe rota de conteúdo sem servidor.
-    s = s.replace(
-      "h('a', { class: 'btn btn-ghost btn-sm', href: `/api/deals/${d.id}/documents/${doc.versionId}/content` }, 'BAIXAR')",
-      "h('a', { class: 'btn btn-ghost btn-sm', href: doc.downloadUrl, download: doc.name }, 'BAIXAR')");
     s = s.replace('async function render() {\n', "async function render() {\n  if (location.hash.startsWith('#/i/')) { location.reload(); return; }\n");
 
     must(s.includes("startsWith('#/i/')) { location.reload()"), 'recarga do convite em render()');
     must(s.includes('location.hash.match'), 'roteamento do convite por hash');
     must(s.includes('ribbon-reset'), 'faixa da prévia');
-    must(s.includes('doc.downloadUrl'), 'download por data: URI');
+    // Sem servidor não há rota de conteúdo: o download da prévia depende do data: URI que o mock
+    // põe em doc.downloadUrl. O app já o prefere, então aqui não há substituição — só a garantia.
+    must(s.includes('doc.downloadUrl ||'), 'download por data: URI (doc.downloadUrl em primeiro lugar)');
     must(!s.includes('serviceWorker'), 'service worker removido');
   }
 
