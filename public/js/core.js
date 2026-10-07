@@ -209,6 +209,25 @@ export async function walletPick({ title = 'Conectar Verum Wallet', allowCreate 
 }
 
 /**
+ * Conectar "a Verum Wallet", e não "uma conta": se a extensão real está neste navegador, vai
+ * direto nela — quem instalou a carteira não deveria ver uma lista de personas simuladas. O
+ * seletor só aparece quando a única coisa disponível é a carteira DEMO.
+ */
+export async function connectVerum({ title = 'Conectar Verum Wallet' } = {}) {
+  const ad = getAdapter();
+  const real = ad.providers.find((p) => !p.demo);
+  if (!real) return walletPick({ title });
+  ad.use(real);
+  const conta = await real.connect();
+  return { ...conta, provider: real, origem: real.label ?? 'Verum Wallet' };
+}
+
+/** Há carteira real (extensão) neste navegador? Decide o que a tela promete antes de clicar. */
+export function temCarteiraReal() {
+  return getAdapter().providers.some((p) => !p.demo);
+}
+
+/**
  * Pedido de assinatura de MENSAGEM.
  * - DEMO: a mesa desenha a janela que a carteira desenharia.
  * - Carteira real: a extensão desenha a dela. Aqui só mostramos a mensagem e esperamos — desenhar

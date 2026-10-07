@@ -7,7 +7,7 @@ import { templateLines } from '../src/services/partnership.ts';
 import { base58Encode, base58Decode, verifyEd25519, canonicalJson, newInviteCode, normalizeInviteCode, CODE_ALPHABET, safeEqualHex } from '../src/lib/crypto.ts';
 import { AssetAdapter, defaultAssetRegistry, SolanaPayQrAdapter, DemoQrAdapter, qrAdapterFor, demoMint } from '../src/adapters/index.ts';
 import { selectProvider, createWalletAdapter, DemoVerumWalletProvider } from '../public/js/wallet-adapter.js';
-import { detectVerumProviders, normalizarProvider } from '../public/js/verum-provider.js';
+import { detectVerumProviders, normalizarProvider, onVerumReady } from '../public/js/verum-provider.js';
 import { choiceState, pctToBps } from '../public/js/onboarding-logic.js';
 import { maskEmail, maskPhone } from '../src/lib/common.ts';
 
@@ -163,6 +163,34 @@ test('13 Verum Wallet real: a ponte reconhece a extensão, convive com o DEMO e 
   assert.match(outra.sonda[0].motivo!, /somente a Verum Wallet/);
   // Sem carteira nenhuma, o motivo é dito em vez de engolido.
   assert.match(createWalletAdapter({ demoMode: false }).reason!, /não encontrada/);
+  // Nada reconhecido: a sonda lista os globais com cara de carteira, para o diagnóstico dizer o
+  // nome real do objeto em vez de só "não encontrada".
+  const pistas = detectVerumProviders({ minhaCarteiraSolana: { conectar() {}, assinar() {} } } as any);
+  assert.equal(pistas.providers.length, 0);
+  assert.equal(pistas.sonda[0].onde, 'window.minhaCarteiraSolana');
+  assert.match(pistas.sonda[0].motivo!, /formato não reconhecido/);
+  assert.deepEqual(pistas.sonda[0].metodos, ['assinar', 'conectar']);
+});
+
+test('13b extensão que já está presente também avisa: o adapter pode ter sido montado antes dela', async () => {
+  const relogio = { setInterval, clearInterval, setTimeout, clearTimeout, addEventListener() {}, removeEventListener() {} };
+  const extensao = { isVerumWallet: true, connect() { return { address: 'x' }; }, signMessage() { return 'y'; } };
+
+  // Caso que quebrava: a carteira JÁ existe quando o observador começa. Antes isto era lido como
+  // "nada a fazer" e a tela continuava dizendo que não achou, com a extensão instalada.
+  let avisos = 0;
+  onVerumReady(() => { avisos += 1; }, { ...relogio, verum: extensao } as any);
+  assert.equal(avisos, 1, 'carteira já presente tem de disparar o aviso');
+
+  // E o caso de chegar depois: o observador continua vendo.
+  const tardio: any = { ...relogio };
+  let avisouTarde = 0;
+  const parar = onVerumReady(() => { avisouTarde += 1; }, tardio);
+  assert.equal(avisouTarde, 0);
+  tardio.verum = extensao;
+  await new Promise((r) => setTimeout(r, 700));
+  assert.equal(avisouTarde, 1, 'carteira que injeta depois do render tem de ser notada');
+  parar();
 });
 
 function luminance(hex: string): number {

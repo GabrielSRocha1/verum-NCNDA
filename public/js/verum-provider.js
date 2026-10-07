@@ -91,6 +91,25 @@ export function normalizarProvider(bruto, nome) {
  * Varre o ambiente. Devolve { providers, sonda } — a sonda é o retrato do que foi visto, para a
  * tela de diagnóstico mostrar por que uma carteira presente não foi aceita.
  */
+/**
+ * Quando nada é reconhecido, "não achei" não ajuda ninguém. Isto lista os globais do navegador com
+ * cara de carteira para o diagnóstico mostrar o nome real do objeto que a extensão injetou — é
+ * assim que se descobre a API de uma extensão nova sem adivinhar.
+ */
+export function pistasDeCarteira(escopo = globalThis) {
+  const out = [];
+  let chaves = [];
+  try { chaves = Object.keys(escopo); } catch { return out; }
+  for (const k of chaves) {
+    if (!/verum|wallet|solana|phantom|backpack|sollet|glow/i.test(k)) continue;
+    let v;
+    try { v = escopo[k]; } catch { continue; }
+    if (!v || typeof v !== 'object') continue;
+    out.push({ onde: `window.${k}`, metodos: metodos(v) });
+  }
+  return out;
+}
+
 export function detectVerumProviders(escopo = globalThis) {
   const providers = [];
   const sonda = [];
@@ -112,6 +131,14 @@ export function detectVerumProviders(escopo = globalThis) {
   if (outra && typeof outra === 'object' && !pareceVerum(outra, 'solana')) {
     sonda.push({ onde: 'window.solana', aceito: false, motivo: 'outra carteira: a mesa aceita somente a Verum Wallet', metodos: metodos(outra) });
   }
+  // Nenhuma carteira reconhecida: junta as pistas, para o diagnóstico dizer o que EXISTE no
+  // navegador em vez de só "não encontrada".
+  if (!providers.length) {
+    const vistos = new Set(sonda.map((x) => x.onde));
+    for (const p of pistasDeCarteira(escopo)) {
+      if (!vistos.has(p.onde)) sonda.push({ onde: p.onde, aceito: false, motivo: 'objeto encontrado, formato não reconhecido', metodos: p.metodos });
+    }
+  }
   return { providers, sonda };
 }
 
@@ -120,7 +147,6 @@ export function detectVerumProviders(escopo = globalThis) {
  * no máximo uma vez, para a tela se refazer com a carteira já disponível.
  */
 export function onVerumReady(cb, escopo = globalThis) {
-  if (detectVerumProviders(escopo).providers.length) return () => {};
   let feito = false;
   const disparar = () => { if (feito) return; if (!detectVerumProviders(escopo).providers.length) return; feito = true; parar(); cb(); };
   const eventos = ['verum#initialized', 'verum:ready', 'wallet-standard:register-wallet'];
@@ -131,5 +157,8 @@ export function onVerumReady(cb, escopo = globalThis) {
     for (const e of eventos) escopo.removeEventListener?.(e, disparar);
     escopo.clearInterval?.(timer); escopo.clearTimeout?.(prazo);
   }
+  // Checa JÁ: a carteira pode ter aparecido entre a montagem do adapter e esta chamada. Sem isto,
+  // "já está presente" seria lido como "nada a fazer" e a tela continuaria dizendo que não achou.
+  disparar();
   return parar;
 }
