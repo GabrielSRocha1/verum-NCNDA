@@ -5,6 +5,7 @@
 //   npm run access -- approve <id|e-mail|carteira> [--por="seu nome"]
 //   npm run access -- reject  <id|e-mail|carteira> [--por="seu nome"] [--motivo="..."]
 //   npm run access -- purge   [--dias=90]
+//   npm run access -- test-email <destino>
 import { existsSync } from 'node:fs';
 if (existsSync('.env')) process.loadEnvFile('.env');
 
@@ -24,14 +25,15 @@ Uso:
   npm run access -- approve <id|e-mail|carteira> [--por="seu nome"]
   npm run access -- reject  <id|e-mail|carteira> [--por="seu nome"] [--motivo="..."]
   npm run access -- purge   [--dias=90]
+  npm run access -- test-email <destino>      # confere host, porta, SSL e senha
 `;
 
 if (!acao || ['help', '--help', '-h'].includes(acao)) { console.log(USO); process.exit(0); }
-if (!['list', 'approve', 'reject', 'purge'].includes(acao)) {
+if (!['list', 'approve', 'reject', 'purge', 'test-email'].includes(acao)) {
   console.error(`Ação desconhecida: ${acao}${USO}`);
   process.exit(1);
 }
-if (['approve', 'reject'].includes(acao) && !alvo) {
+if (['approve', 'reject', 'test-email'].includes(acao) && !alvo) {
   console.error(`A ação "${acao}" precisa de um id, e-mail ou carteira.${USO}`);
   process.exit(1);
 }
@@ -82,10 +84,13 @@ try {
   }
 
   if (acao === 'approve') {
-    const { request, userId } = await access.approveRequest(ctx, alvo!, flags.get('por') ?? '');
+    const { request, userId, envio } = await access.approveRequest(ctx, alvo!, flags.get('por') ?? '');
     console.log(`\nAprovado: ${request.full_name} <${request.email}>`);
     console.log(`Usuário criado: ${userId}`);
     console.log(`Carteira registrada: ${request.wallet} (rede ${ctx.cfg.network})`);
+    // A conta já existe: falha de e-mail é aviso, não desfaz nada. Mas você precisa SABER, senão
+    // a pessoa fica esperando um retorno que não saiu.
+    console.log(envio.ok ? 'E-mail de aprovação enviado.' : `E-mail NÃO enviado: ${envio.motivo}\n→ avise a pessoa por fora.`);
     console.log(`\nAgora essa pessoa entra sozinha em ${ctx.cfg.publicOrigin} pela Verum Wallet,`);
     console.log(`cria a própria mesa e gera os convites para os indicados.\n`);
   }
@@ -93,7 +98,25 @@ try {
   if (acao === 'reject') {
     const r = await access.rejectRequest(ctx, alvo!, flags.get('por') ?? '', flags.get('motivo') ?? null);
     console.log(`\nRecusada a solicitação de ${r.full_name} <${r.email}>.`);
+    console.log(r.envio.ok ? 'E-mail de retorno enviado.' : `E-mail NÃO enviado: ${r.envio.motivo}`);
     console.log('Nenhuma conta foi criada.\n');
+  }
+
+  if (acao === 'test-email') {
+    if (!ctx.mail.enabled) throw new Error('Envio desligado: defina SMTP_PASS (e SMTP_USER) no ambiente.');
+    const smtp = ctx.cfg.smtp!;
+    console.log(`\nServidor: ${smtp.host}:${smtp.port} ${smtp.port === 465 ? '(SSL)' : '(STARTTLS)'}`);
+    console.log(`Remetente: ${ctx.mail.remetente}`);
+    const v = await ctx.mail.verify();
+    console.log(v.ok ? 'Conexão e senha: OK' : `Conexão/senha FALHOU: ${v.motivo}`);
+    if (!v.ok) { await fecha(); process.exit(1); }
+    const r = await ctx.mail.send({
+      para: alvo!,
+      assunto: 'Teste de envio — VERUM NCNDA',
+      texto: 'Se você recebeu esta mensagem, o envio de e-mail da mesa está funcionando.\n\nVERUM NCNDA',
+    });
+    console.log(r.ok ? `Mensagem de teste enviada para ${alvo}.\n` : `Envio FALHOU: ${r.motivo}\n`);
+    if (!r.ok) { await fecha(); process.exit(1); }
   }
 
   if (acao === 'purge') {

@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Db, Queryable } from '../db.ts';
 import type { AppConfig } from '../config.ts';
+import type { Mailer } from './mailer.ts';
 import { sha256Hex, signValue, unsignValue, base58Encode, safeEqualHex } from '../lib/crypto.ts';
 import { HttpError, RateLimiter, audit } from '../lib/common.ts';
 import { AssetAdapter, type SignatureAdapter, type SettlementAdapter } from '../adapters/index.ts';
@@ -12,6 +13,7 @@ export interface Ctx {
   sig: SignatureAdapter;
   settlement: SettlementAdapter;
   limiter: RateLimiter;
+  mail: Mailer;
 }
 
 export type ChallengePurpose = 'INVITE' | 'LOGIN' | 'AGREEMENT' | 'DOCUMENT' | 'SETTLEMENT' | 'VIEW_LINK' | 'ACCESS_REQUEST';

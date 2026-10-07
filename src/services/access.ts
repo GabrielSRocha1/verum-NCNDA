@@ -11,6 +11,7 @@
 import type { Queryable } from '../db.ts';
 import { HttpError, audit, conflict } from '../lib/common.ts';
 import { issueChallenge, consumeChallenge, type Ctx } from './auth.ts';
+import { enviarSemEsperar, type Envio } from './mailer.ts';
 import { validateSignup, type SignupInput } from './invitations.ts';
 
 export interface AccessRequestInput extends SignupInput {
@@ -67,20 +68,53 @@ export async function submitRequest(ctx: Ctx, input: AccessRequestInput) {
       return null;
     }
 
+    const nome = trim(input.fullName, 120);
     const { rows: [r] } = await q.query<any>(
       `INSERT INTO access_requests (full_name, email, phone, country, organization, referral, note, wallet, created_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-      [trim(input.fullName, 120), email, String(input.phone).trim(), input.country, organization,
+      [nome, email, String(input.phone).trim(), input.country, organization,
         trim(input.referral, 120) || null, String(input.note ?? '').trim().slice(0, 500) || null,
         wallet, ctx.cfg.now().toISOString()]);
 
     // Sem userId: ainda não existe usuário. A auditoria guarda o id da solicitação, não os dados
     // pessoais (o scrub de lib/common.ts já omitiria nome, e-mail e telefone de qualquer forma).
     await audit(q, { at: ctx.cfg.now(), action: 'ACCESS_REQUESTED', entity: 'access_request', entityId: r.id, wallet });
-    return { id: r.id as string, status: 'PENDENTE' as AccessRequestStatus };
+    return { id: r.id as string, status: 'PENDENTE' as AccessRequestStatus, nome, email, organization, wallet };
   });
   if (failure) throw failure;
-  return out!;
+  const r = out!;
+  // Sem esperar: a pessoa está olhando a tela. SMTP lento ou fora do ar não pode fazer o cadastro
+  // parecer travado — a solicitação já está gravada, o e-mail é aviso.
+  enviarSemEsperar(ctx.mail, {
+    para: r.email,
+    assunto: 'Recebemos sua solicitação de acesso — VERUM NCNDA',
+    texto: [
+      `${r.nome}, sua solicitação de acesso à mesa privada VERUM NCNDA foi registrada.`, '',
+      `Organização: ${r.organization}`,
+      `Carteira: ${r.wallet}`, '',
+      'O responsável pela mesa vai analisar e o retorno virá por este e-mail.',
+      'Até lá, essa carteira ainda não tem acesso: solicitar não é cadastrar.', '',
+      'Se não foi você quem pediu, ignore esta mensagem — nada foi criado em seu nome.', '',
+      'VERUM NCNDA — mesa OTC privada. Nunca pedimos seed, chave privada ou senha.',
+    ].join('\n'),
+  });
+  if (ctx.mail.operador) {
+    enviarSemEsperar(ctx.mail, {
+      para: ctx.mail.operador,
+      assunto: `Nova solicitação de acesso: ${r.nome} (${r.organization})`,
+      texto: [
+        'Chegou uma solicitação de acesso à mesa.', '',
+        `Nome: ${r.nome}`, `E-mail: ${r.email}`, `Organização: ${r.organization}`,
+        `Carteira (comprovada por assinatura): ${r.wallet}`,
+        `Id da solicitação: ${r.id}`, '',
+        'Para decidir:',
+        '  npm run access -- list',
+        `  npm run access -- approve ${r.id} --por="seu nome"`,
+        `  npm run access -- reject ${r.id} --motivo="..."`,
+      ].join('\n'),
+    });
+  }
+  return { id: r.id, status: r.status };
 }
 
 // ---------------------------------------------------------------- uso pelo comando (scripts/access.ts)
@@ -120,7 +154,7 @@ export async function findRequest(q: Queryable, alvo: string): Promise<AccessReq
  * mesa e convida. Diferente do cadastro por link de visualização, que nasce 'VIEW_LINK' e só lê.
  */
 export async function approveRequest(ctx: Ctx, alvo: string, por: string) {
-  return ctx.db.tx(async (q) => {
+  const feito = await ctx.db.tx(async (q) => {
     const r = await findRequest(q, alvo);
     if (r.status !== 'PENDENTE') throw conflict('ALREADY_DECIDED', `Solicitação já está ${r.status}.`);
 
@@ -144,10 +178,25 @@ export async function approveRequest(ctx: Ctx, alvo: string, por: string) {
     await audit(q, { at: ctx.cfg.now(), userId: u.id, action: 'ACCESS_APPROVED', entity: 'access_request', entityId: r.id, wallet: r.wallet });
     return { request: r, userId: u.id as string };
   });
+  // Aqui o envio é AGUARDADO: quem roda o comando precisa saber se a pessoa foi avisada. Falha
+  // não desfaz a conta — ela já existe; o comando mostra o motivo para você avisar na mão.
+  const envio = await ctx.mail.send({
+    para: feito.request.email,
+    assunto: 'Seu acesso à mesa VERUM NCNDA foi aprovado',
+    texto: [
+      `${feito.request.full_name}, seu acesso à mesa privada VERUM NCNDA foi aprovado.`, '',
+      `Entre em ${ctx.cfg.publicOrigin} com a Verum Wallet, usando a MESMA carteira que você assinou na solicitação:`,
+      `  ${feito.request.wallet}`, '',
+      'Não há senha: você entra assinando uma mensagem com a carteira.',
+      'Depois de entrar, você pode abrir a sua mesa e gerar os convites para os parceiros indicados.', '',
+      'VERUM NCNDA — mesa OTC privada. Nunca pedimos seed, chave privada ou senha.',
+    ].join('\n'),
+  });
+  return { ...feito, envio };
 }
 
 export async function rejectRequest(ctx: Ctx, alvo: string, por: string, motivo: string | null) {
-  return ctx.db.tx(async (q) => {
+  const recusada = await ctx.db.tx(async (q) => {
     const r = await findRequest(q, alvo);
     if (r.status !== 'PENDENTE') throw conflict('ALREADY_DECIDED', `Solicitação já está ${r.status}.`);
     await q.query(
@@ -156,6 +205,18 @@ export async function rejectRequest(ctx: Ctx, alvo: string, por: string, motivo:
     await audit(q, { at: ctx.cfg.now(), action: 'ACCESS_REJECTED', entity: 'access_request', entityId: r.id, wallet: r.wallet });
     return r;
   });
+  const envio = await ctx.mail.send({
+    para: recusada.email,
+    assunto: 'Sobre sua solicitação de acesso — VERUM NCNDA',
+    texto: [
+      `${recusada.full_name}, sua solicitação de acesso à mesa privada VERUM NCNDA não foi aprovada neste momento.`, '',
+      motivo ? `Motivo informado: ${String(motivo).trim()}` : 'Nenhum motivo foi registrado.', '',
+      'Nenhum cadastro foi criado e nenhum dado seu foi usado para outra finalidade.',
+      'Se entender que houve engano, responda a este e-mail.', '',
+      'VERUM NCNDA — mesa OTC privada.',
+    ].join('\n'),
+  });
+  return { ...recusada, envio };
 }
 
 /** Descarte de solicitações recusadas antigas: dado pessoal de quem não entrou não fica para sempre (LGPD). */

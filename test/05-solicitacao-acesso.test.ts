@@ -186,6 +186,88 @@ test('7. recusar não cria nada, e decidida não se decide de novo', async () =>
   assert.equal((await solicitar({ email }, kp)).res.statusCode, 200);
 });
 
+test('9. e-mail: avisa a pessoa e o operador, e falha de envio NUNCA derruba a operação', async () => {
+  const enviados: any[] = [];
+  const mailBom = {
+    enabled: true, remetente: 'VERUM NCNDA <suporte@verumcrypto.com>', operador: 'suporte@verumcrypto.com',
+    async send(m: any) { enviados.push(m); return { ok: true, id: '1' }; },
+    async verify() { return { ok: true }; },
+  };
+  const comEmail = await buildApp({ env, seed: false, mail: mailBom });
+  try {
+    const kp = nacl.sign.keyPair();
+    const address = base58Encode(kp.publicKey);
+    const ch = await comEmail.app.inject({ method: 'POST', url: '/access/request/wallet-challenge', payload: { address }, remoteAddress: freshIp() });
+    const c = ch.json();
+    const email = `aviso.${address.slice(0, 6).toLowerCase()}@ex.test`;
+    const r = await comEmail.app.inject({
+      method: 'POST', url: '/access/request', remoteAddress: freshIp(),
+      payload: {
+        challengeId: c.challengeId, nonce: c.nonce,
+        signature: base58Encode(nacl.sign.detached(new TextEncoder().encode(c.message), kp.secretKey)),
+        fullName: 'Paula Antunes Reis', email, phone: '+55 11 95555-7000', country: 'BR', organization: 'Mesa Horizonte',
+      },
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    await new Promise((res) => setTimeout(res, 50));                           // os avisos saem sem segurar a resposta
+    assert.equal(enviados.length, 2, 'avisa quem pediu e quem decide');
+    const paraPessoa = enviados.find((m) => m.para === email);
+    assert.match(paraPessoa.assunto, /Recebemos sua solicitação/);
+    assert.match(paraPessoa.texto, /solicitar não é cadastrar/);
+    assert.ok(!paraPessoa.texto.includes('95555-7000'), 'o aviso não repete o telefone');
+    const paraOperador = enviados.find((m) => m.para === 'suporte@verumcrypto.com');
+    assert.match(paraOperador.texto, /npm run access -- approve/);
+    assert.match(paraOperador.texto, new RegExp(address));
+
+    // Aprovação avisa a pessoa com a carteira e o endereço de entrada.
+    enviados.length = 0;
+    const { envio } = await access.approveRequest(comEmail.ctx, email, 'operador');
+    assert.equal(envio.ok, true);
+    assert.equal(enviados.length, 1);
+    assert.match(enviados[0].assunto, /aprovado/i);
+    assert.match(enviados[0].texto, new RegExp(address));
+    assert.match(enviados[0].texto, /MESMA carteira/);
+  } finally { await comEmail.app.close(); }
+
+  // SMTP fora do ar: a conta continua sendo criada e o comando recebe o motivo.
+  const mailRuim = {
+    enabled: true, remetente: 'x', operador: null,
+    async send() { return { ok: false, motivo: 'ECONNREFUSED smtp.zoho.com:465' }; },
+    async verify() { return { ok: false, motivo: 'ECONNREFUSED' }; },
+  };
+  const semRede = await buildApp({ env, seed: false, mail: mailRuim });
+  try {
+    const kp = nacl.sign.keyPair();
+    const address = base58Encode(kp.publicKey);
+    const ch = await semRede.app.inject({ method: 'POST', url: '/access/request/wallet-challenge', payload: { address }, remoteAddress: freshIp() });
+    const c = ch.json();
+    const email = `semrede.${address.slice(0, 6).toLowerCase()}@ex.test`;
+    const r = await semRede.app.inject({
+      method: 'POST', url: '/access/request', remoteAddress: freshIp(),
+      payload: {
+        challengeId: c.challengeId, nonce: c.nonce,
+        signature: base58Encode(nacl.sign.detached(new TextEncoder().encode(c.message), kp.secretKey)),
+        fullName: 'Rogerio Mantovani', email, phone: '+55 11 95555-7001', country: 'BR', organization: 'Mesa Sul',
+      },
+    });
+    assert.equal(r.statusCode, 200, 'e-mail quebrado não pode derrubar a solicitação');
+    const { userId, envio } = await access.approveRequest(semRede.ctx, email, 'operador');
+    assert.ok(userId, 'a conta é criada mesmo sem e-mail');
+    assert.equal(envio.ok, false);
+    assert.match(envio.motivo!, /ECONNREFUSED/);
+    const { rows } = await semRede.db.query<any>(`SELECT status FROM access_requests WHERE lower(email) = $1`, [email]);
+    assert.equal(rows[0].status, 'APROVADO');
+  } finally { await semRede.app.close(); }
+});
+
+test('10. sem SMTP configurado o envio fica desligado e a interface não promete e-mail', async () => {
+  assert.equal((await app.app.inject({ method: 'GET', url: '/api/config' })).json().emailEnabled, false);
+  assert.equal(app.ctx.mail.enabled, false);
+  const r = await app.ctx.mail.send({ para: 'x@ex.test', assunto: 'a', texto: 'b' });
+  assert.equal(r.ok, false);
+  assert.match(r.motivo!, /desligado/i);
+});
+
 test('8. a auditoria registra pedido e decisão, sem dado pessoal', async () => {
   const { rows } = await app.db.query<any>(
     `SELECT action, row_to_json(a)::text AS j FROM audit_logs a WHERE action LIKE 'ACCESS_%'`);

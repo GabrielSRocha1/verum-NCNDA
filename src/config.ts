@@ -3,6 +3,12 @@ import { randomBytes } from 'node:crypto';
 
 export interface RateLimitRule { max: number; windowMs: number }
 
+export interface SmtpConfig {
+  host: string; port: number; user: string; pass: string;
+  from: string;                  // remetente exibido
+  operador: string | null;       // quem recebe o aviso de nova solicitação
+}
+
 export interface AppConfig {
   demoMode: boolean;
   network: 'solana-demo' | 'solana-devnet';
@@ -21,6 +27,7 @@ export interface AppConfig {
   sessionMaxHours: number;
   verumWalletDownloadUrl: string;
   accessRequests: boolean;       // formulário público de solicitação de acesso ligado?
+  smtp: SmtpConfig | null;       // null = envio de e-mail desligado (sem senha configurada)
   rateLimits: Record<'open' | 'resume' | 'verifyCode' | 'walletChallenge' | 'walletVerify' | 'authChallenge' | 'authVerify', RateLimitRule>;
   now: () => Date;
 }
@@ -36,6 +43,22 @@ function int(v: string | undefined, d: number, min: number, max: number): number
   if (n < min || n > max) throw new Error(`Valor fora do intervalo [${min}, ${max}]: ${v}`);
   return n;
 }
+/**
+ * E-mail é opcional: sem SMTP_PASS o envio fica desligado e a interface deixa de prometer retorno
+ * por e-mail. Melhor não prometer do que prometer e não entregar.
+ */
+function smtpFrom(env: NodeJS.ProcessEnv): SmtpConfig | null {
+  const pass = (env.SMTP_PASS ?? '').trim();
+  if (!pass) return null;
+  const user = (env.SMTP_USER ?? '').trim();
+  if (!user) throw new Error('SMTP_USER é obrigatório quando SMTP_PASS está definida.');
+  const port = int(env.SMTP_PORT, 465, 1, 65535);
+  const host = (env.SMTP_HOST ?? 'smtp.zoho.com').trim();
+  const from = (env.MAIL_FROM ?? '').trim() || `VERUM NCNDA <${user}>`;
+  const operador = (env.MAIL_OPERADOR ?? '').trim() || user;
+  return { host, port, user, pass, from, operador };
+}
+
 /**
  * Segredos de HMAC. Só podem ser efêmeros (sorteados a cada boot) quando o banco também é local:
  * num banco compartilhado, pepper novo invalida o código dos convites JÁ ENVIADOS e segredo novo
@@ -85,6 +108,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     // Desligado por padrão: é a única porta de entrada sem convite, e só deve existir enquanto
     // você estiver de fato recebendo solicitações.
     accessRequests: bool(env.ACCESS_REQUESTS, false),
+    smtp: smtpFrom(env),
     rateLimits: {
       open: { max: 10, windowMs: 60_000 },
       resume: { max: 20, windowMs: 60_000 },

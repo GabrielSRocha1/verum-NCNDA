@@ -4109,9 +4109,13 @@ function accessRequestPage() {
   const pronto = (email) => clear(document.getElementById('app')).append(
     h('main', { class: 'gate' }, brand('Solicitação enviada'),
       h('h1', {}, 'Solicitação enviada'),
-      h('p', { class: 'lead' }, 'Seus dados e a carteira que você assinou ficaram registrados. O responsável pela mesa vai analisar e ',
-        h('b', {}, 'o retorno vai para o e-mail que você cadastrou'),
-        email ? h('span', { class: 'mono' }, ` (${email})`) : null, '.'),
+      // Só promete e-mail quando o envio está de fato configurado no servidor. Prometer retorno
+      // por e-mail com SMTP desligado seria combinar algo que ninguém vai cumprir.
+      state.config?.emailEnabled
+        ? h('p', { class: 'lead' }, 'Seus dados e a carteira que você assinou ficaram registrados. O responsável pela mesa vai analisar e ',
+          h('b', {}, 'o retorno vai para o e-mail que você cadastrou'),
+          email ? h('span', { class: 'mono' }, ` (${email})`) : null, '.')
+        : h('p', { class: 'lead' }, 'Seus dados e a carteira que você assinou ficaram registrados. O responsável pela mesa vai analisar e retornar pelo contato que você informou.'),
       h('p', { class: 'notice notice-info', style: 'margin-top:14px' },
         'Aprovado, você entra direto pela Verum Wallet — sem senha e sem novo cadastro, usando a mesma carteira que assinou agora.'),
       h('p', { class: 'small muted', style: 'margin-top:14px' }, 'Nada foi criado ainda: enquanto não houver aprovação, esta carteira não tem acesso à mesa.'),

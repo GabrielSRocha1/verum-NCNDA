@@ -12,7 +12,7 @@ Requisitos: Node.js 22.18+ (executa TypeScript nativamente; não há etapa de bu
 npm install
 cp .env.example .env        # ajuste COOKIE_SECURE=false para http://localhost
 npm start                   # http://localhost:8787
-npm test                    # 61 testes (motor de comissões, onboarding 3.9, parceria/banco/settlement)
+npm test                    # 64 testes (motor de comissões, onboarding 3.9, parceria/banco/settlement)
 npm run db:reset            # apaga o banco local; o próximo "npm start" recria o DEMO
 ```
 
@@ -52,11 +52,11 @@ src/
   lib/bps.ts       motor de grade/comissões: bps inteiros, BigInt, resíduo explícito, nunca float
   lib/crypto.ts    token 256 bits, código VOTC, HMAC/tempo constante, base58, Ed25519, JSON canônico
   adapters/        SignatureAdapter, AssetAdapter (registry), QrPayloadAdapter (Solana Pay), SettlementAdapter (DEMO), BlockchainAdapter
-  services/        auth (challenge/nonce/sessão), invitations (uso único), sharing (link de visualização só-leitura), access (solicitação de acesso), deals (views com privacidade), partnership (ofertas, linhas, versões, assinaturas, settlement, documentos)
+  services/        auth (challenge/nonce/sessão), invitations (uso único), sharing (link de visualização só-leitura), access (solicitação de acesso), mailer (SMTP, opcional), deals (views com privacidade), partnership (ofertas, linhas, versões, assinaturas, settlement, documentos)
   demo.ts          personas e mesas DEMO (chaves derivadas de sementes PÚBLICAS)
 migrations/        001_schema.sql (20 entidades) · 002_guards.sql (triggers de integridade) · 003_view_link.sql (link de visualização) · 004_view_link_signup.sql (cadastro de visualizador) · 005_access_requests.sql (solicitação de acesso)
 docs/              ARQUITETURA, ADR-001, SEGURANCA (checklist), DEVNET
-test/              61 testes (node --test)
+test/              64 testes (node --test)
 ```
 
 Separação OFF-CHAIN × ON-CHAIN: cadastro, convite, documentos, Deal Room, workflow e auditoria são off-chain. Carteira, assinatura, regras econômicas, escrow, settlement e distribuição ficam atrás de adapters; nesta entrega o único adapter de settlement é o **DEMO_SIMULATED** (nada se move, nenhum selo de proteção é exibido).
@@ -90,12 +90,21 @@ Não há cadastro público, e todo convite depende de uma mesa que já tem admin
 npm run access -- list
 npm run access -- approve <id|e-mail|carteira> --por="seu nome"
 npm run access -- reject  <id> --motivo="..."
-npm run access -- purge   --dias=90     # descarta recusadas antigas (LGPD)
+npm run access -- purge   --dias=90             # descarta recusadas antigas (LGPD)
+npm run access -- test-email voce@exemplo.com   # confere host, porta, SSL e senha
 ```
 
 Aprovar cria usuário + carteira numa transação. **É o único caminho do sistema que cria conta sem convite**, e por isso só existe por comando, nunca por rota HTTP. A conta nasce com `origin='INVITE'`: abre mesa própria e convida — diferente do cadastro por link de visualização, que nasce `VIEW_LINK` e só lê.
 
 A partir daí o primeiro Pay Master entra sozinho pela Verum Wallet, cria a mesa e gera os convites para os indicados, pelo fluxo que já existia.
+
+### Retorno por e-mail
+
+Com `SMTP_PASS` configurada (Zoho: `smtp.zoho.com:465`, SSL), três mensagens saem sozinhas: confirmação para quem solicitou, aviso para o operador já com o comando de aprovar/recusar, e o retorno da decisão. Confira host, porta, SSL e senha de uma vez com `npm run access -- test-email voce@exemplo.com`.
+
+Sem SMTP configurado o envio fica **desligado**, e a tela de sucesso deixa de prometer retorno por e-mail — prometer o que ninguém vai cumprir é pior do que não prometer.
+
+E-mail **nunca** derruba a operação: se o envio falhar, a solicitação continua gravada e a conta aprovada continua criada. O aviso para quem pediu sai sem segurar a resposta (SMTP lento não pode fazer o cadastro parecer travado); o da decisão é aguardado, e o comando mostra o motivo da falha para você avisar por fora.
 
 Com banco local (PGlite) **pare o servidor antes de gravar pelo comando** — é de processo único, e o próprio comando avisa. Com `DATABASE_URL` (Postgres de servidor) não há esse limite.
 

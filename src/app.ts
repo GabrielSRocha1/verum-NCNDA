@@ -18,6 +18,7 @@ import {
 import * as inv from './services/invitations.ts';
 import * as share from './services/sharing.ts';
 import * as access from './services/access.ts';
+import { createMailer, type Mailer } from './services/mailer.ts';
 import * as deals from './services/deals.ts';
 import * as ps from './services/partnership.ts';
 import { seedDemo, personaDirectory } from './demo.ts';
@@ -38,7 +39,7 @@ const roleEnum = { type: 'string', enum: deals.ROLE_KEYS };
 
 export interface BuiltApp { app: FastifyInstance; ctx: Ctx; db: Db }
 
-export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS.ProcessEnv; seed?: boolean; logger?: boolean } = {}): Promise<BuiltApp> {
+export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS.ProcessEnv; seed?: boolean; logger?: boolean; mail?: Mailer } = {}): Promise<BuiltApp> {
   const cfg = loadConfig(opts.env ?? process.env, opts.config ?? {});
   const db = await openDb({ databaseUrl: cfg.databaseUrl, dataDir: cfg.dataDir });
   const assets = new AssetAdapter(defaultAssetRegistry(), cfg.mainnetEnabled);
@@ -47,6 +48,7 @@ export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS
     sig: new SolanaSignatureAdapter(cfg.network),
     settlement: new DemoSettlementAdapter(),
     limiter: new RateLimiter(() => cfg.now().getTime()),
+    mail: opts.mail ?? createMailer(cfg),
   };
   await syncAssets(ctx);
   // Banco local: semeia o DEMO no boot, como sempre. Banco compartilhado: semear no boot deixaria
@@ -148,6 +150,7 @@ export async function buildApp(opts: { config?: Partial<AppConfig>; env?: NodeJS
     walletDownloadUrl: cfg.verumWalletDownloadUrl || null,
     resumeWindowMinutes: cfg.resumeWindowMinutes, onboardingTtlMinutes: cfg.onboardingTtlMinutes,
     accessRequests: cfg.accessRequests,
+    emailEnabled: ctx.mail.enabled,
     walletAttestationAvailable: WALLET_ATTESTATION_AVAILABLE,
     walletDeepLinkAvailable: false,
     settlement: { adapter: ctx.settlement.id, demo: ctx.settlement.demo, protectedByContract: ctx.settlement.protectedByContract },
