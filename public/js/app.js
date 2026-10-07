@@ -246,7 +246,12 @@ function accessRequestPage() {
       const env = await api('POST', '/access/request', { challengeId: ch.challengeId, nonce: ch.nonce, signature, ...dados });
       pronto(dados.email, env.emailSent);
     } catch (ex) {
-      if (ex.code !== 'CANCELLED') err.textContent = ex.message;
+      if (ex.code !== 'CANCELLED') {
+        err.textContent = ex.message;
+        // O sheet da assinatura fecha e devolve a página onde ela estava: num formulário longo, o
+        // recado pode cair fora da tela e virar "não aconteceu nada" — que foi o que pareceu.
+        err.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+      }
       btn.disabled = false;
     }
   };
@@ -1077,6 +1082,19 @@ function walletDiagnostico(ad) {
         : state.verumConector.disponivel ? 'sim, e respondeu' : 'sim, mas a carteira não respondeu'),
       state.verumConector?.motivo ? linha('Detalhe', state.verumConector.motivo, 'muted') : null,
       linha('Página dentro de iframe', dentroDeIframe() ? 'sim' : 'não'),
+      // A carteira declara no handshake o que sabe fazer. Sem 'signMessage' nessa lista a mesa não
+      // funciona ali — ela só entra com assinatura — e é melhor ler isso aqui do que descobrir
+      // esperando dois minutos por uma resposta que a carteira não vai dar.
+      (() => {
+        const real = ad.providers.find((p) => !p.demo);
+        const caps = real?.capacidades ?? [];
+        if (!real) return null;
+        return h('div', {},
+          linha('A carteira declara saber', caps.length ? caps.join(' · ') : 'nada (não declarou capacidades)'),
+          linha('Assina mensagem', !caps.length ? 'não declarado — a mesa tenta mesmo assim'
+            : caps.includes('signMessage') ? 'sim' : 'NÃO — a mesa não consegue entrar com esta carteira',
+          caps.length && !caps.includes('signMessage') ? 'form-error' : ''));
+      })(),
       h('p', { class: 'small muted', style: 'margin-top:10px' }, 'A carteira não injeta nada em sites de fora: a mesa precisa ser aberta pelo app da Verum e embarcar o conector dela. A mesa aceita somente a Verum Wallet.')));
 }
 

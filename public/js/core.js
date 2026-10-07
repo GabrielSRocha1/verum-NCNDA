@@ -242,10 +242,32 @@ export function temCarteiraReal() {
 }
 
 /**
+ * A carteira sabe assinar mensagem? Lista vazia = não declarou nada, e aí tentar é o certo (carteira
+ * antiga). Lista cheia sem 'signMessage' = ela avisou que não faz isso, e a mesa não entra sem
+ * assinatura — insistir renderia dois minutos de espera por uma resposta que não vem.
+ */
+export function podeAssinarMensagem(provider) {
+  const caps = provider?.capacidades ?? [];
+  return !caps.length || caps.includes('signMessage');
+}
+
+/**
+ * Traduz a falha crua do conector. Isto estava inline e tratava TUDO como cancelamento — e quem
+ * chama ignora cancelamento em silêncio, então a carteira ficar muda não mostrava NADA na tela.
+ * Recusar é cancelar; ficar sem resposta não é.
+ */
+export function falhaDeAssinatura(erro) {
+  const bruto = (erro && erro.message) || String(erro);
+  if (/REJECT/i.test(bruto)) return { code: 'CANCELLED', message: 'Assinatura recusada na carteira.' };
+  if (/TIMEOUT/i.test(bruto)) return { code: 'WALLET_TIMEOUT', message: 'A Verum Wallet não respondeu ao pedido de assinatura. Verifique se o aplicativo está aberto e tente de novo.' };
+  return { code: 'WALLET_ERROR', message: bruto };
+}
+
+/**
  * Pedido de assinatura de MENSAGEM.
  * - DEMO: a mesa desenha a janela que a carteira desenharia.
- * - Carteira real: a extensão desenha a dela. Aqui só mostramos a mensagem e esperamos — desenhar
- *   um botão ASSINAR nosso na frente do prompt real seria um pedido falso em cima do verdadeiro.
+ * - Carteira real: a carteira desenha a dela. Aqui só mostramos a mensagem e esperamos — desenhar
+ *   um botão ASSINAR nosso na frente do pedido real seria um pedido falso em cima do verdadeiro.
  */
 export function walletSign(message, { title = 'Assinar mensagem', action = 'ASSINAR' } = {}) {
   const ad = getAdapter();
@@ -254,6 +276,7 @@ export function walletSign(message, { title = 'Assinar mensagem', action = 'ASSI
   const curta = (c) => (c ? `${c.address.slice(0, 4)}...${c.address.slice(-4)}` : '');
   return new Promise((resolve, reject) => {
     let done = false;
+    let demora = null;      // avisa quando a carteira some; precisa morrer junto com o sheet
     openSheet((s) => {
       if (p.demo) {
         s.render(
@@ -275,10 +298,33 @@ export function walletSign(message, { title = 'Assinar mensagem', action = 'ASSI
         h('p', { class: 'muted small', style: 'margin-bottom:10px' }, `${p.label ?? 'Verum Wallet'} · ${curta(p.current)}`),
         h('div', { class: 'sigmsg' }, message),
         estado,
+        // Sem isto a única saída de uma carteira que não responde é fechar a página: o sheet fica
+        // parado em "confirme na carteira" até o prazo do conector (dois minutos).
+        h('button', { class: 'btn btn-ghost btn-block', style: 'margin-top:12px', onclick: () => s.close() }, 'CANCELAR'),
       );
-      p.signMessage(message).then((sig) => { done = true; s.close(); resolve(sig); })
-        .catch((e) => { done = true; s.close(); reject(Object.assign(e instanceof Error ? e : new Error(String(e)), { code: 'CANCELLED' })); });
-    }, { label: title, onClose: () => { if (!done) reject(Object.assign(new Error('Assinatura recusada.'), { code: 'CANCELLED' })); } });
+
+      // A carteira declara no handshake o que sabe fazer. Dizer agora é melhor do que esperar.
+      if (!podeAssinarMensagem(p)) {
+        done = true; s.close();
+        reject(Object.assign(new Error('A carteira conectada não oferece assinatura de mensagem neste modo. A mesa só entra com assinatura — sem ela, não há como provar a posse da carteira.'), { code: 'NO_SIGN_MESSAGE' }));
+        return;
+      }
+
+      // Nenhuma janela apareceu na carteira? Depois de alguns segundos isso deixa de ser demora e
+      // passa a ser sinal de que o pedido não foi atendido. Avisar é melhor que girar em silêncio.
+      demora = setTimeout(() => {
+        estado.className = 'notice notice-risk';
+        clear(estado);
+        add(estado, 'A carteira ainda não respondeu. Se nenhuma janela de assinatura apareceu na Verum Wallet, ela pode não atender a pedidos de assinatura de mensagem neste modo.');
+      }, 12000);
+
+      p.signMessage(message).then((sig) => { clearTimeout(demora); done = true; s.close(); resolve(sig); })
+        .catch((e) => {
+          clearTimeout(demora); done = true; s.close();
+          const f = falhaDeAssinatura(e);
+          reject(Object.assign(new Error(f.message), { code: f.code }));
+        });
+    }, { label: title, onClose: () => { clearTimeout(demora); if (!done) reject(Object.assign(new Error('Assinatura recusada.'), { code: 'CANCELLED' })); } });
   });
 }
 

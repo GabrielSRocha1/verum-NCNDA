@@ -86,6 +86,13 @@ export function normalizarProvider(bruto, nome) {
     /** @type {{ key: string, address: string, name: string, kind: string } | null} */
     current: /** @type {any} */ (null),
     bruto,
+    /**
+     * O que a carteira DECLARA saber fazer. Chega no handshake, depois da normalização — por isso
+     * é getter, não cópia. Lista vazia = carteira que não declara nada (aí tentar é o certo); lista
+     * cheia sem 'signMessage' = ela avisou que não assina mensagem, e insistir só rende dois
+     * minutos de espera por uma resposta que não vem.
+     */
+    get capacidades() { return Array.isArray(bruto.capabilities) ? bruto.capabilities : []; },
     async connect() {
       const r = await bruto[conectar]();
       const address = paraEndereco(r) ?? paraEndereco(bruto);

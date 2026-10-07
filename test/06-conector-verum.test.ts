@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import nacl from 'tweetnacl';
 import { detectVerumProviders, iniciarConector, dentroDeIframe } from '../public/js/verum-provider.js';
+import { podeAssinarMensagem } from '../public/js/core.js';
 import { base58Encode } from '../public/js/wallet-adapter.js';
 import { base58Decode } from '../src/lib/crypto.ts';
 
@@ -122,7 +123,52 @@ test('2. a lista de origens é usada: a mensagem a assinar não sai para quem n�
   pedido.catch(() => undefined);
 });
 
-test('3. fora do app da Verum nada muda: sem conector a mesa segue dizendo que a carteira não está lá', async () => {
+test('3. carteira muda não vira silêncio na tela, e o que ela declara saber é respeitado', async () => {
+  (globalThis as any).localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+  (globalThis as any).sessionStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+  const core = await import('../public/js/core.js');
+
+  // Este é o caso que aconteceu de verdade: o desafio foi criado no servidor, a carteira não
+  // respondeu ao pedido de assinatura, o conector cortou em TIMEOUT — e a mesa tratava isso como
+  // cancelamento, que quem chama ignora em silêncio. Resultado: nada na tela, nada no banco.
+  const mudo = core.falhaDeAssinatura(new Error('TIMEOUT'));
+  assert.equal(mudo.code, 'WALLET_TIMEOUT', 'carteira sem resposta não pode virar cancelamento');
+  assert.match(mudo.message, /não respondeu/);
+
+  // Recusar é diferente de não responder: recusa é decisão da pessoa e segue em silêncio.
+  assert.equal(core.falhaDeAssinatura(new Error('USER_REJECTED')).code, 'CANCELLED');
+  assert.equal(core.falhaDeAssinatura(new Error('VERUM_SIGN_MSG_REJECTED')).code, 'CANCELLED');
+  assert.equal(core.falhaDeAssinatura(new Error('rede caiu')).code, 'WALLET_ERROR');
+
+  // Capacidades declaradas no handshake: sem 'signMessage' a mesa não tem como entrar, e falar
+  // isso na hora é melhor do que esperar o prazo do conector por uma resposta que não vem.
+  assert.equal(core.podeAssinarMensagem({ capacidades: ['signMessage', 'getAddresses'] } as any), true);
+  assert.equal(core.podeAssinarMensagem({ capacidades: ['signAndSendPayment'] } as any), false);
+  // Carteira que não declara nada é carteira antiga: aí tentar é o certo, não presumir ausência.
+  assert.equal(core.podeAssinarMensagem({ capacidades: [] } as any), true);
+  assert.equal(core.podeAssinarMensagem({} as any), true);
+});
+
+test('4. as capacidades vêm da carteira em tempo real: chegam no handshake, depois da normalização', async () => {
+  const chave = nacl.sign.keyPair();
+  const { win, paiAtende } = montarIframe([WALLET], chave);
+  await iniciarConector(win);
+  const [p] = detectVerumProviders(win).providers;
+
+  // Array.from porque a lista nasce dentro do vm: outro realm, outro Array.prototype, e o
+  // deepStrictEqual repara nisso. No navegador é tudo o mesmo realm — artefato do arnês.
+  // Antes de a wallet-mãe atender o handshake, ninguém declarou nada — e "não declarou" tem de
+  // significar "tente mesmo assim", nunca "não sabe assinar".
+  assert.deepEqual(Array.from(p.capacidades), []);
+
+  // A wallet-mãe deste teste declara ['signMessage'] no VERUM_INIT_RESPONSE. Se `capacidades` fosse
+  // uma cópia feita na normalização, continuaria vazia — o handshake acontece DEPOIS da detecção.
+  paiAtende();
+  assert.deepEqual(Array.from(p.capacidades), ['signMessage'], 'capacidades têm de refletir o handshake, não o instante da detecção');
+  assert.equal(podeAssinarMensagem(p), true, 'declarou signMessage: a mesa tem de seguir');
+});
+
+test('5. fora do app da Verum nada muda: sem conector a mesa segue dizendo que a carteira não está lá', async () => {
   // Navegador comum, página de primeiro nível: o conector nem instala a ponte.
   // embarcado:false é o que impede a tela de tratar um iframe qualquer como app da Verum.
   assert.deepEqual(await iniciarConector({} as any), { embarcado: false, disponivel: false, motivo: 'conector não embarcado nesta página' });
