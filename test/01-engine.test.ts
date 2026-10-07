@@ -258,6 +258,13 @@ test('13d com carteira real, conectar vai DIRETO nela — e não pede confirmaç
   await assert.rejects(core.escolherContaParaEntrar(), /document is not defined/, 'tinha de cair no seletor');
   assert.equal(pedidosDeConexao, 0, 'não pode conectar numa carteira que declarou não assinar');
 
+  // Mas a trava é pelo que ela DECLARA, e declaração envelhece: pedindo explicitamente, a mesa tem
+  // de tentar a carteira real. Sem esta saída, uma wallet que passasse a assinar sem anunciar
+  // ficaria barrada até alguém reparar e publicar uma versão nova da mesa.
+  const forcada = await core.escolherContaParaEntrar(null, { forcarReal: true });
+  assert.equal(forcada.address, endereco);
+  assert.equal(pedidosDeConexao, 1, 'com o pedido explícito, conecta na real');
+
   delete (globalThis as any).verum;
   core.resetAdapter();
   assert.equal(core.temCarteiraReal(), false, 'sem a real, sobra a DEMO — e aí o seletor é o caminho');

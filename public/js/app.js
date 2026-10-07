@@ -146,9 +146,9 @@ function back(href, label = 'Voltar') {
 // ================================================================= login (sem senha)
 function loginPage() {
   const err = h('p', { class: 'form-error', role: 'alert' });
-  const enter = async () => {
+  const enter = async (opcoes = {}) => {
     err.textContent = '';
-    try { await walletLogin(); toast('Sessão iniciada.'); render(); }
+    try { await walletLogin(null, opcoes); toast('Sessão iniciada.'); render(); }
     catch (e) {
       if (e.code === 'CANCELLED') return;
       // Dentro do app da Verum "não encontrada neste aparelho" seria mentira: a carteira está aí, o
@@ -174,7 +174,7 @@ function loginPage() {
     h('p', { class: 'lead' }, shared
       ? 'Você abriu um link de visualização de uma operação. Entre com a Verum Wallet para ver a mesa — é só leitura: você não assina nem altera nada.'
       : 'Acesso só por convite. Quem já concluiu o convite entra assinando com a Verum Wallet — sem senha.'),
-    h('button', { class: 'btn btn-primary btn-block', onclick: enter },
+    h('button', { class: 'btn btn-primary btn-block', onclick: () => enter() },
       temReal || !state.config?.demoMode ? 'ENTRAR COM A VERUM WALLET' : 'ENTRAR COM CARTEIRA DEMO'),
     // Baixar a carteira DENTRO da própria carteira é absurdo — e abrir aba nova a partir do iframe
     // dela, pior ainda. Com a ponte de pé, o botão sai de cena.
@@ -187,6 +187,11 @@ function loginPage() {
     naoAssina ? h('div', { class: 'notice notice-risk', style: 'margin-top:14px' },
       'A Verum Wallet conectada não assina mensagens para plataformas parceiras nesta versão. A mesa entra só por assinatura — é assim que ela prova que a carteira é sua, sem senha. ',
       state.config?.demoMode ? 'Para seguir testando, entre com a carteira DEMO.' : 'Avise o responsável pela mesa.') : null,
+    // A trava acima é pelo que a carteira DECLARA. Quando a wallet passar a assinar, este link é o
+    // que permite conferir na hora, sem esperar um novo deploy da mesa.
+    naoAssina ? h('p', { class: 'small muted', style: 'margin-top:10px;text-align:center' },
+      h('a', { href: '#', onclick: (ev) => { ev.preventDefault(); enter({ forcarReal: true }); } },
+        'Tentar assinar com a Verum Wallet mesmo assim')) : null,
     // Aberta dentro de um iframe sem carteira que sirva: é o caso de estar no app da Verum com a
     // ponte falhando — ou com carteira que não assina. O diagnóstico vive em Perfil → Carteira, que
     // exige sessão, ou seja, justo o que não se consegue aqui. Então aparece nesta tela, recolhido.
@@ -220,6 +225,9 @@ function accessRequestPage() {
   };
   const temReal = temCarteiraUtilizavel();
   const naoAssina = temCarteiraReal() && !temReal;
+  // A trava é pelo que a carteira DECLARA. Quando a wallet passar a assinar, isto permite conferir
+  // na hora, sem esperar deploy novo da mesa. Fora desse caso a caixa nem aparece.
+  const forcar = h('input', { type: 'checkbox' });
   const btn = h('button', { class: 'btn btn-primary btn-block' }, temReal ? 'CONECTAR VERUM WALLET E ENVIAR' : 'CONECTAR CARTEIRA E ENVIAR');
   const pronto = (email, avisoEnviado) => clear(document.getElementById('app')).append(
     h('main', { class: 'gate' }, brand('Solicitação enviada'),
@@ -249,7 +257,7 @@ function accessRequestPage() {
       };
       // Com a extensão instalada, conecta nela direto; só cai no seletor quando a única coisa
       // disponível é a carteira DEMO (caso de teste).
-      const acc = await connectVerum({ title: 'Conectar Verum Wallet' });
+      const acc = await connectVerum({ title: 'Conectar Verum Wallet', forcarReal: forcar.checked });
       await usarConta(acc);
       const ch = await api('POST', '/access/request/wallet-challenge', { address: acc.address });
       const signature = await walletSign(ch.message, { title: 'Prova de posse da carteira', action: 'ASSINAR E ENVIAR' });
@@ -290,6 +298,8 @@ function accessRequestPage() {
         ? 'A Verum Wallet conectada não assina mensagens para plataformas parceiras nesta versão, e a solicitação precisa da assinatura para provar que a carteira é sua. '
         : 'A Verum Wallet não foi detectada neste navegador. ',
       state.config?.demoMode ? 'Para o teste, a assinatura vai usar a carteira DEMO.' : 'Abra esta mesa pelo app da Verum para conectar sua carteira.'),
+    naoAssina ? h('label', { class: 'small muted', style: 'display:flex;gap:8px;align-items:center;margin-top:10px' },
+      forcar, 'Tentar assinar com a Verum Wallet mesmo assim') : null,
     temReal ? null : walletDiagnostico(getAdapter()),
     state.config?.demoMode ? h('p', { class: 'small muted', style: 'margin-top:26px;text-align:center' }, 'DEMO / TESTNET — NO REAL FUNDS') : null);
 }

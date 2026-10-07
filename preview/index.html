@@ -3697,14 +3697,16 @@ async function walletPick({ title = 'Conectar Verum Wallet', allowCreate = true,
  * nela — quem tem a carteira não deveria ver uma lista de personas simuladas. O seletor aparece
  * quando a única coisa disponível é a DEMO, ou quando a real declarou que não assina mensagem.
  */
-async function connectVerum({ title = 'Conectar Verum Wallet' } = {}) {
+async function connectVerum({ title = 'Conectar Verum Wallet', forcarReal = false } = {}) {
   const ad = getAdapter();
   const reais = ad.providers.filter((p) => !p.demo);
   const real = reais.find(podeAssinarMensagem) ?? reais[0];
   const demo = ad.providers.find((p) => p.demo);
   // Carteira real que DECLAROU não assinar mensagem não serve para a mesa. Havendo DEMO, o seletor
   // é melhor que o beco sem saída: a pessoa vê as duas, etiquetadas, e escolhe sabendo qual é qual.
-  if (!real || (!podeAssinarMensagem(real) && demo)) return walletPick({ title });
+  // forcarReal = alguém pediu explicitamente para tentar a carteira real apesar da declaração; é o
+  // caminho de quem está conferindo se a carteira passou a assinar sem anunciar.
+  if (!real || (!forcarReal && !podeAssinarMensagem(real) && demo)) return walletPick({ title });
   ad.use(real);
   const conta = await real.connect();
   return { ...conta, provider: real, origem: real.label ?? 'Verum Wallet' };
@@ -3796,37 +3798,50 @@ function walletSign(message, { title = 'Assinar mensagem', action = 'ASSINAR' } 
         return;
       }
       const estado = h('p', { class: 'notice notice-info', style: 'margin-top:14px' }, 'Confirme na Verum Wallet para continuar.');
-      s.render(
+      const cabecalho = () => [
         h('h2', {}, title),
         h('p', { class: 'muted small', style: 'margin-bottom:10px' }, `${p.label ?? 'Verum Wallet'} · ${curta(p.current)}`),
         h('div', { class: 'sigmsg' }, message),
-        estado,
-        // Sem isto a única saída de uma carteira que não responde é fechar a página: o sheet fica
-        // parado em "confirme na carteira" até o prazo do conector (dois minutos).
-        h('button', { class: 'btn btn-ghost btn-block', style: 'margin-top:12px', onclick: () => s.close() }, 'CANCELAR'),
-      );
+      ];
 
-      // A carteira declara no handshake o que sabe fazer. Dizer agora é melhor do que esperar.
+      const pedir = () => {
+        s.render(...cabecalho(), estado,
+          // Sem isto a única saída de uma carteira que não responde é fechar a página: o sheet fica
+          // parado em "confirme na carteira" até o prazo do conector (dois minutos).
+          h('button', { class: 'btn btn-ghost btn-block', style: 'margin-top:12px', onclick: () => s.close() }, 'CANCELAR'));
+
+        // Nenhuma janela apareceu na carteira? Depois de alguns segundos isso deixa de ser demora e
+        // passa a ser sinal de que o pedido não foi atendido. Avisar é melhor que girar em silêncio.
+        demora = setTimeout(() => {
+          estado.className = 'notice notice-risk';
+          clear(estado);
+          add(estado, 'A carteira ainda não respondeu. Se nenhuma janela de assinatura apareceu na Verum Wallet, ela pode não atender a pedidos de assinatura de mensagem neste modo.');
+        }, 12000);
+
+        p.signMessage(message).then((sig) => { clearTimeout(demora); done = true; s.close(); resolve(sig); })
+          .catch((e) => {
+            clearTimeout(demora); done = true; s.close();
+            const f = falhaDeAssinatura(e);
+            reject(Object.assign(new Error(f.message), { code: f.code }));
+          });
+      };
+
+      // A carteira declara no handshake o que sabe fazer. Declarou e não listou assinatura de
+      // mensagem? Dizer agora poupa o prazo inteiro de espera. Mas a trava é pelo que ela DECLARA,
+      // e declaração pode estar desatualizada — daí a porta de saída, em vez de um "não" definitivo
+      // que esconderia uma carteira que passou a assinar sem anunciar.
       if (!podeAssinarMensagem(p)) {
-        done = true; s.close();
-        reject(Object.assign(new Error('A carteira conectada não oferece assinatura de mensagem neste modo. A mesa só entra com assinatura — sem ela, não há como provar a posse da carteira.'), { code: 'NO_SIGN_MESSAGE' }));
+        s.render(...cabecalho(),
+          h('div', { class: 'notice notice-risk', style: 'margin-top:14px' },
+            'Esta carteira não declarou saber assinar mensagem. A mesa entra só por assinatura — é assim que ela prova que a carteira é sua, sem senha.'),
+          h('p', { class: 'small muted', style: 'margin-top:8px' }, `A carteira declara: ${(p.capacidades ?? []).join(' · ') || '—'}`),
+          h('div', { class: 'btn-row', style: 'margin-top:14px' },
+            h('button', { class: 'btn btn-ghost', onclick: () => s.close() }, 'CANCELAR'),
+            h('button', { class: 'btn btn-primary', onclick: () => pedir() }, 'TENTAR MESMO ASSIM')));
         return;
       }
 
-      // Nenhuma janela apareceu na carteira? Depois de alguns segundos isso deixa de ser demora e
-      // passa a ser sinal de que o pedido não foi atendido. Avisar é melhor que girar em silêncio.
-      demora = setTimeout(() => {
-        estado.className = 'notice notice-risk';
-        clear(estado);
-        add(estado, 'A carteira ainda não respondeu. Se nenhuma janela de assinatura apareceu na Verum Wallet, ela pode não atender a pedidos de assinatura de mensagem neste modo.');
-      }, 12000);
-
-      p.signMessage(message).then((sig) => { clearTimeout(demora); done = true; s.close(); resolve(sig); })
-        .catch((e) => {
-          clearTimeout(demora); done = true; s.close();
-          const f = falhaDeAssinatura(e);
-          reject(Object.assign(new Error(f.message), { code: f.code }));
-        });
+      pedir();
     }, { label: title, onClose: () => { clearTimeout(demora); if (!done) reject(Object.assign(new Error('Assinatura recusada.'), { code: 'CANCELLED' })); } });
   });
 }
@@ -3837,19 +3852,19 @@ function walletSign(message, { title = 'Assinar mensagem', action = 'ASSINAR' } 
  * é verificável sem navegador. Com a carteira real na mão, entrar é "entrar com a Verum Wallet" e
  * ponto — o seletor é o caminho de quem só tem a DEMO.
  */
-async function escolherContaParaEntrar(accountKey = null) {
+async function escolherContaParaEntrar(accountKey = null, { forcarReal = false } = {}) {
   const ad = getAdapter();
   const acc = accountKey
     ? (await listarContas(ad, [accountKey]))[0]
-    : await connectVerum({ title: 'Entrar com a Verum Wallet' });
+    : await connectVerum({ title: 'Entrar com a Verum Wallet', forcarReal });
   if (!acc) throw Object.assign(new Error('Conta não encontrada na carteira.'), { code: 'NO_WALLET' });
   await usarConta(acc);
   return acc;
 }
 
 /** Login sem senha: challenge → assinatura → sessão curta. */
-async function walletLogin(accountKey = null) {
-  const acc = await escolherContaParaEntrar(accountKey);
+async function walletLogin(accountKey = null, opcoes = {}) {
+  const acc = await escolherContaParaEntrar(accountKey, opcoes);
   const ch = await api('POST', '/auth/wallet-challenge', { address: acc.address });
   const signature = await walletSign(ch.message, { title: 'Entrar na mesa', action: 'ASSINAR E ENTRAR' });
   await api('POST', '/auth/wallet-verify', { challengeId: ch.challengeId, nonce: ch.nonce, signature });
@@ -4371,9 +4386,9 @@ function back(href, label = 'Voltar') {
 // ================================================================= login (sem senha)
 function loginPage() {
   const err = h('p', { class: 'form-error', role: 'alert' });
-  const enter = async () => {
+  const enter = async (opcoes = {}) => {
     err.textContent = '';
-    try { await walletLogin(); toast('Sessão iniciada.'); render(); }
+    try { await walletLogin(null, opcoes); toast('Sessão iniciada.'); render(); }
     catch (e) {
       if (e.code === 'CANCELLED') return;
       // Dentro do app da Verum "não encontrada neste aparelho" seria mentira: a carteira está aí, o
@@ -4399,7 +4414,7 @@ function loginPage() {
     h('p', { class: 'lead' }, shared
       ? 'Você abriu um link de visualização de uma operação. Entre com a Verum Wallet para ver a mesa — é só leitura: você não assina nem altera nada.'
       : 'Acesso só por convite. Quem já concluiu o convite entra assinando com a Verum Wallet — sem senha.'),
-    h('button', { class: 'btn btn-primary btn-block', onclick: enter },
+    h('button', { class: 'btn btn-primary btn-block', onclick: () => enter() },
       temReal || !state.config?.demoMode ? 'ENTRAR COM A VERUM WALLET' : 'ENTRAR COM CARTEIRA DEMO'),
     // Baixar a carteira DENTRO da própria carteira é absurdo — e abrir aba nova a partir do iframe
     // dela, pior ainda. Com a ponte de pé, o botão sai de cena.
@@ -4412,6 +4427,11 @@ function loginPage() {
     naoAssina ? h('div', { class: 'notice notice-risk', style: 'margin-top:14px' },
       'A Verum Wallet conectada não assina mensagens para plataformas parceiras nesta versão. A mesa entra só por assinatura — é assim que ela prova que a carteira é sua, sem senha. ',
       state.config?.demoMode ? 'Para seguir testando, entre com a carteira DEMO.' : 'Avise o responsável pela mesa.') : null,
+    // A trava acima é pelo que a carteira DECLARA. Quando a wallet passar a assinar, este link é o
+    // que permite conferir na hora, sem esperar um novo deploy da mesa.
+    naoAssina ? h('p', { class: 'small muted', style: 'margin-top:10px;text-align:center' },
+      h('a', { href: '#', onclick: (ev) => { ev.preventDefault(); enter({ forcarReal: true }); } },
+        'Tentar assinar com a Verum Wallet mesmo assim')) : null,
     // Aberta dentro de um iframe sem carteira que sirva: é o caso de estar no app da Verum com a
     // ponte falhando — ou com carteira que não assina. O diagnóstico vive em Perfil → Carteira, que
     // exige sessão, ou seja, justo o que não se consegue aqui. Então aparece nesta tela, recolhido.
@@ -4445,6 +4465,9 @@ function accessRequestPage() {
   };
   const temReal = temCarteiraUtilizavel();
   const naoAssina = temCarteiraReal() && !temReal;
+  // A trava é pelo que a carteira DECLARA. Quando a wallet passar a assinar, isto permite conferir
+  // na hora, sem esperar deploy novo da mesa. Fora desse caso a caixa nem aparece.
+  const forcar = h('input', { type: 'checkbox' });
   const btn = h('button', { class: 'btn btn-primary btn-block' }, temReal ? 'CONECTAR VERUM WALLET E ENVIAR' : 'CONECTAR CARTEIRA E ENVIAR');
   const pronto = (email, avisoEnviado) => clear(document.getElementById('app')).append(
     h('main', { class: 'gate' }, brand('Solicitação enviada'),
@@ -4474,7 +4497,7 @@ function accessRequestPage() {
       };
       // Com a extensão instalada, conecta nela direto; só cai no seletor quando a única coisa
       // disponível é a carteira DEMO (caso de teste).
-      const acc = await connectVerum({ title: 'Conectar Verum Wallet' });
+      const acc = await connectVerum({ title: 'Conectar Verum Wallet', forcarReal: forcar.checked });
       await usarConta(acc);
       const ch = await api('POST', '/access/request/wallet-challenge', { address: acc.address });
       const signature = await walletSign(ch.message, { title: 'Prova de posse da carteira', action: 'ASSINAR E ENVIAR' });
@@ -4515,6 +4538,8 @@ function accessRequestPage() {
         ? 'A Verum Wallet conectada não assina mensagens para plataformas parceiras nesta versão, e a solicitação precisa da assinatura para provar que a carteira é sua. '
         : 'A Verum Wallet não foi detectada neste navegador. ',
       state.config?.demoMode ? 'Para o teste, a assinatura vai usar a carteira DEMO.' : 'Abra esta mesa pelo app da Verum para conectar sua carteira.'),
+    naoAssina ? h('label', { class: 'small muted', style: 'display:flex;gap:8px;align-items:center;margin-top:10px' },
+      forcar, 'Tentar assinar com a Verum Wallet mesmo assim') : null,
     temReal ? null : walletDiagnostico(getAdapter()),
     state.config?.demoMode ? h('p', { class: 'small muted', style: 'margin-top:26px;text-align:center' }, 'DEMO / TESTNET — NO REAL FUNDS') : null);
 }
